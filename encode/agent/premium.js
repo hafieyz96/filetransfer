@@ -151,7 +151,11 @@ async function analyze(input, log, signal) {
   const j = await probe(input);
   const v = j.streams.find((s) => s.codec_type === 'video' && !(s.disposition && s.disposition.attached_pic));
   if (!v) throw new Error('Tiada stream video');
-  const audio = j.streams.filter((s) => s.codec_type === 'audio');
+  // Keep only audio ffmpeg can decode. iPhone .mov files can carry an extra track (e.g. Spatial
+  // Audio / APAC) that probes as codec "none"; mapping it makes the final encode fail outright.
+  const allAudio = j.streams.filter((s) => s.codec_type === 'audio');
+  const audio = allAudio.filter((s) => s.codec_name && !['none', 'unknown'].includes(s.codec_name));
+  if (audio.length < allAudio.length) log(`audio: ${allAudio.length - audio.length} trek tanpa decoder diabaikan`);
 
   const [sn, sd] = String(v.sample_aspect_ratio || '1:1').split(':').map(Number);
   const sar = sn > 0 && sd > 0 ? sn / sd : 1;
@@ -205,7 +209,7 @@ async function analyze(input, log, signal) {
     meanLuma: +yavg.toFixed(1), lowLight, motion: +mafd.toFixed(2), sceneCuts,
     borders: cropW && cropH ? { w: cropW, h: cropH, hasBorders: cropW < v.width * 0.98 || cropH < v.height * 0.98 } : null,
     noise,
-    audio: audio.map((s) => ({ codec: s.codec_name, channels: s.channels })),
+    audio: audio.map((s) => ({ index: s.index, codec: s.codec_name, channels: s.channels })),
     sizeBytes: fs.statSync(input).size,
   };
   log(`analisis: ${a.displayWidth}x${a.displayHeight} (DAR ${a.displayAspect}, rot ${rot}, SAR ${sar.toFixed(3)}) `
@@ -287,7 +291,7 @@ async function encodeFinal({ master, input, out, p, a, codec, q, signal, fixY })
   const fpsStr = `${p.outFps.num}/${p.outFps.den}`;
   const audioCopy = a.audio.length && a.audio.every((s) => MP4_AUDIO_COPY.has(s.codec));
   await ffmpeg(['-y', '-hwaccel', 'cuda', '-i', master, '-i', input,
-    '-map', '0:v:0', '-map', '1:a?', '-t', a.duration.toFixed(3),
+    '-map', '0:v:0', ...a.audio.flatMap((s) => ['-map', `1:${s.index}`]), '-t', a.duration.toFixed(3),
     '-vf', `scale=${p.outW}:${p.outH}:flags=lanczos,setsar=1,fps=${fpsStr}${lumaFix(fixY)}`,
     ...encoderArgs(codec, q, p.outFpsValue),
     '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-color_range', 'tv',

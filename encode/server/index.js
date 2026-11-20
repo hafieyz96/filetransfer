@@ -51,7 +51,9 @@ const safeEqual = (a, b) => {
   return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
 };
 function rm(p) { try { fs.unlinkSync(p); } catch { /* already gone */ } }
-const todo = (job) => VARIANTS.filter((v) => !job.files[v] && !job.errors[v]);
+// Variants the uploader asked for (jobs from before the choice existed get all of them).
+const wanted = (job) => (job.want && job.want.length ? VARIANTS.filter((v) => job.want.includes(v)) : VARIANTS);
+const todo = (job) => wanted(job).filter((v) => !job.files[v] && !job.errors[v]);
 
 // After every variant result: finish the job once nothing is left to do.
 function settle(job) {
@@ -81,10 +83,15 @@ app.get('/health', (_req, res) => res.json({ ok: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ---- public: upload + status + download ----
+// ?variant=standard|premium picks one output; checked before any bytes are accepted.
 app.post('/upload', (req, res, next) => {
   // check password BEFORE accepting any bytes
   if (UPLOAD_PASSWORD && !safeEqual(req.get('x-upload-password') || '', UPLOAD_PASSWORD)) {
     return res.status(401).set('Connection', 'close').json({ error: 'Password salah' });
+  }
+  const v = req.query.variant;
+  if (v !== undefined && !isVariant(v)) {
+    return res.status(400).set('Connection', 'close').json({ error: 'Pilihan tak sah (standard atau premium)' });
   }
   next();
 }, (req, res) => {
@@ -99,6 +106,7 @@ app.post('/upload', (req, res, next) => {
       id, status: 'queued', createdAt: Date.now(), updatedAt: Date.now(),
       originalName: path.basename(req.file.originalname || 'video').slice(0, 120),
       inputBytes: req.file.size, files: {}, errors: {},
+      want: req.query.variant ? [req.query.variant] : VARIANTS,
     };
     saveJobs();
     res.status(201).json({ id });
@@ -109,7 +117,7 @@ app.get('/jobs/:id', (req, res) => {
   const job = isId(req.params.id) && jobs[req.params.id];
   if (!job) return res.status(404).json({ error: 'Job tak jumpa' });
   const variants = {};
-  for (const v of VARIANTS) {
+  for (const v of wanted(job)) {
     variants[v] = job.files[v]
       ? { state: 'done', url: `/download/${job.id}/${v}` }
       : job.errors[v] ? { state: 'failed', error: job.errors[v] }
@@ -126,13 +134,28 @@ function sendVariant(req, res, variant) {
   const base = path.parse(job.originalName).name || 'video';
   res.download(outPath(job.id, variant), `${base}-${SUFFIX[variant]}.mp4`);
 }
+// Page header pill: is the PC agent around, and how busy is it. No job details are exposed.
+let agentSeenAt = 0;
+app.get('/status', (_req, res) => {
+  const all = Object.values(jobs);
+  res.json({
+    agentOnline: Date.now() - agentSeenAt < 60_000, // agent polls every few seconds, heartbeats every ~10s
+    queued: all.filter((j) => j.status === 'queued').length,
+    processing: all.filter((j) => j.status === 'processing').length,
+    maxUploadMB: MAX_UPLOAD_MB,
+  });
+});
+
 app.get('/download/:id/:variant', (req, res) => sendVariant(req, res, req.params.variant));
 app.get('/download/:id', (req, res) => sendVariant(req, res, 'standard')); // old links
 
 // ---- agent (PC) endpoints, protected by AGENT_KEY ----
 const agent = express.Router();
-agent.use((req, res, next) =>
-  safeEqual(req.get('x-api-key') || '', AGENT_KEY) ? next() : res.status(401).json({ error: 'Unauthorized' }));
+agent.use((req, res, next) => {
+  if (!safeEqual(req.get('x-api-key') || '', AGENT_KEY)) return res.status(401).json({ error: 'Unauthorized' });
+  agentSeenAt = Date.now();
+  next();
+});
 
 agent.get('/ping', (_req, res) => res.json({ ok: true }));
 
