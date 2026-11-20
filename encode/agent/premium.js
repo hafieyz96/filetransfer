@@ -27,12 +27,24 @@ const CFG = {
   profile: process.env.PREMIUM_PROFILE || 'max',
   content: (process.env.PREMIUM_CONTENT || 'auto').toLowerCase(),
   codec: (process.env.PREMIUM_CODEC || 'hevc').toLowerCase(),
-  vmafMin: Number(process.env.PREMIUM_VMAF_MIN || 95),
+  vmafMin: Number(process.env.PREMIUM_VMAF_MIN || 97),
   keepTemp: process.env.PREMIUM_KEEP_TEMP === '1',
   maxSeconds: Number(process.env.MAX_SECONDS || 30),
   rifeModel: process.env.PREMIUM_RIFE_MODEL || 'rife-v4.26',
   sceneThresh: Number(process.env.PREMIUM_SCENE_THRESH || 20),
   minFreeVramMB: Number(process.env.PREMIUM_MIN_FREE_VRAM_MB || 1500),
+  // Ultra (SeedVR2 3B one-step diffusion restoration), installed outside the repo (README "Ultra")
+  seedvr2Dir: process.env.SEEDVR2_DIR || 'D:/encode-work/seedvr2',
+  ultraMaxSeconds: Number(process.env.ULTRA_MAX_SECONDS || 15),
+  ultraDecodeTile: Number(process.env.ULTRA_DECODE_TILE || 384),
+  ultraChunk: Number(process.env.ULTRA_CHUNK_FRAMES || 150),
+};
+const SEEDVR2 = {
+  python: path.join(CFG.seedvr2Dir, 'venv', 'Scripts', 'python.exe'),
+  repo: path.join(CFG.seedvr2Dir, 'src'),
+  models: path.join(CFG.seedvr2Dir, 'models', 'SEEDVR2'),
+  dit: 'seedvr2_ema_3b_fp16.safetensors',
+  wrapper: path.join(__dirname, 'tools', 'seedvr2_run.py'),
 };
 
 // targetShort: short side of the output (never below the source). fps: target frame rate.
@@ -41,6 +53,9 @@ const CFG = {
 const PROFILES = {
   max: { name: 'max', targetShort: 2160, fps: 120, aiMaxShort: 720 },
   balanced: { name: 'balanced', targetShort: 1440, fps: 60, aiMaxShort: 540 },
+  // SeedVR2 restores/regenerates detail at seedShort (480p: ~4 s/frame on the 2060, faces stay
+  // stable; 360p was faster but changed identities), then Real-ESRGAN x4 + lanczos to 4K.
+  ultra: { name: 'ultra', targetShort: 2160, fps: 60, aiMaxShort: 576, seedShort: 480, seedMaxShort: 576 },
 };
 
 // Video2X only accepts fixed model names; models-live/ maps them to realesr-general-x4v3 at
@@ -147,7 +162,7 @@ class GpuMonitor {
 }
 
 // ---------------------------------------------------------------- analysis
-async function analyze(input, log, signal) {
+async function analyze(input, log, signal, maxSeconds = CFG.maxSeconds) {
   const j = await probe(input);
   const v = j.streams.find((s) => s.codec_type === 'video' && !(s.disposition && s.disposition.attached_pic));
   if (!v) throw new Error('Tiada stream video');
@@ -169,7 +184,7 @@ async function analyze(input, log, signal) {
   const avg = parseRate(v.avg_frame_rate), real = parseRate(v.r_frame_rate);
   const fps = snapFps(avg || real);
   const fpsVal = fps.num / fps.den;
-  const duration = Math.min(Number(j.format.duration) || Number(v.duration) || 0, CFG.maxSeconds);
+  const duration = Math.min(Number(j.format.duration) || Number(v.duration) || 0, maxSeconds);
   const bitDepth = /(10|12)(le|be)$|p010|p012/.test(v.pix_fmt || '') ? (/(12)/.test(v.pix_fmt) ? 12 : 10) : 8;
   const hdr = ['smpte2084', 'arib-std-b67'].includes(v.color_transfer);
   const bitrate = Number(v.bit_rate) || Number(j.format.bit_rate) || 0;
@@ -195,6 +210,10 @@ async function analyze(input, log, signal) {
   let level = bpp > 0 && bpp < 0.035 || block > 3 ? 2 : bpp < 0.09 || block > 2.2 ? 1 : 0;
   const lowLight = yavg > 0 && yavg < 45;
   if (lowLight) level = Math.min(2, level + 1);
+  // bits-per-pixel flatters tiny videos (a 256x144 3gp at 90kbps looks "light"); they are always rough
+  const srcShort = Math.min(dispW, dispH);
+  if (srcShort <= 240) level = 2;
+  else if (srcShort <= 360) level = Math.max(level, 1);
   const noise = ['light', 'moderate', 'heavy'][level];
 
   const a = {
@@ -226,24 +245,35 @@ function plan(a, profile) {
   if (long * scale > NVENC_HEVC_MAX) scale = NVENC_HEVC_MAX / long;
   const outW = even(a.displayWidth * scale), outH = even(a.displayHeight * scale);
 
+  // Ultra: SeedVR2 takes the (never enlarged) source to seedShort, then ESRGAN x4 works on that.
+  let seed = null;
+  if (profile.seedShort) {
+    const seedShort = short <= profile.seedShort ? profile.seedShort : Math.min(even(short), profile.seedMaxShort);
+    const ks = seedShort / short;
+    seed = { w: even(a.displayWidth * ks), h: even(a.displayHeight * ks), short: seedShort };
+  }
+  const srBase = seed ? seed.short : short;
+
   // AI super-resolution only pays off when we really enlarge the picture
-  const srNeeded = Math.min(outW, outH) > short * 1.33;
-  const aiShort = srNeeded ? Math.min(short, profile.aiMaxShort) : short;
+  const srNeeded = Math.min(outW, outH) > srBase * 1.33;
+  const aiShort = seed ? Math.min(short, seed.short) : srNeeded ? Math.min(short, profile.aiMaxShort) : short;
   const k = aiShort / short;
   const aiW = even(a.displayWidth * k), aiH = even(a.displayHeight * k);
+  const srInW = seed ? seed.w : aiW, srInH = seed ? seed.h : aiH;
 
   const mult = profile.fps > a.fpsValue * 1.05 ? Math.max(1, Math.round(profile.fps / a.fpsValue)) : 1;
   const outFps = { num: a.fps.num * mult, den: a.fps.den };
   const content = CFG.content === 'anime' ? 'anime' : 'live';
   const sr = srNeeded ? (content === 'anime'
     ? { slot: 'realesr-animevideov3', desc: 'realesr-animevideov3 (anime)', cwd: CFG.modelsAnime }
-    : { ...SR_SLOTS[a.noise], cwd: CFG.modelsLive }) : null;
+    // after SeedVR2 the frames are already clean: lightest denoise keeps its regenerated detail
+    : { ...SR_SLOTS[seed ? 'light' : a.noise], cwd: CFG.modelsLive }) : null;
   const frames = Math.round(a.duration * a.fpsValue);
   return {
-    profile: profile.name, content, outW, outH, aiW, aiH, srNeeded, sr, mult, outFps,
+    profile: profile.name, content, outW, outH, aiW, aiH, seed, srNeeded, sr, mult, outFps,
     outFpsValue: +(outFps.num / outFps.den).toFixed(3), frames, outFrames: frames * mult,
-    srW: aiW * 4, srH: aiH * 4,
-    rifeUhd: Math.min(aiW, aiH) > 1080,
+    srW: srInW * 4, srH: srInH * 4,
+    rifeUhd: Math.min(srInW, srInH) > 1080,
   };
 }
 
@@ -266,6 +296,68 @@ function video2x(args, { cwd, signal, onProgress, label }) {
       throw new Error(`Video2X ${label} gagal (exit ${r.code}): ${(r.err || r.out).trim().split('\n').slice(-2).join(' | ')}`);
     }
     return r;
+  });
+}
+
+// ---------------------------------------------------------------- SeedVR2 (Ultra)
+function seedvr2Ready() {
+  const missing = [SEEDVR2.python, path.join(SEEDVR2.repo, 'inference_cli.py'), path.join(SEEDVR2.models, SEEDVR2.dit),
+    path.join(SEEDVR2.models, 'ema_vae_fp16.safetensors'), SEEDVR2.wrapper].filter((f) => !fs.existsSync(f));
+  if (missing.length) throw new Error(`SeedVR2 belum dipasang (README "Ultra"): ${missing.join(', ')}`);
+}
+
+// Runs SeedVR2 on `input`, writing PNG frames to outDir/<input basename>/.
+// Settings measured on the RTX 2060 6GB: 3B fp16 + full BlockSwap (weights stay in RAM), VAE
+// tiled; decode tiles above ~400px spill into Windows shared memory and run 3-5x slower.
+function seedvr2({ input, outDir, seedShort, signal, onProgress }) {
+  const args = [SEEDVR2.wrapper, SEEDVR2.repo, input, '--output', outDir, '--output_format', 'png',
+    '--model_dir', SEEDVR2.models, '--dit_model', SEEDVR2.dit, '--resolution', String(seedShort),
+    '--batch_size', '5', '--blocks_to_swap', '32', '--swap_io_components',
+    '--dit_offload_device', 'cpu', '--vae_offload_device', 'cpu',
+    '--vae_encode_tiled', '--vae_encode_tile_size', '512', '--vae_encode_tile_overlap', '32',
+    '--vae_decode_tiled', '--vae_decode_tile_size', String(CFG.ultraDecodeTile), '--vae_decode_tile_overlap', '32',
+    '--chunk_size', String(CFG.ultraChunk), '--color_correction', 'lab', '--debug'];
+  return new Promise((resolve, reject) => {
+    const p = spawn(SEEDVR2.python, args, {
+      cwd: SEEDVR2.repo, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+      env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', SEEDVR2_FORCE_FP16: process.env.SEEDVR2_FORCE_FP16 || 'auto' },
+    });
+    // the venv python.exe is a launcher with a child interpreter: kill the whole tree
+    const kill = () => spawn('taskkill', ['/PID', String(p.pid), '/T', '/F'], { windowsHide: true });
+    if (signal) {
+      if (signal.aborted) { kill(); return reject(new Error('dibatalkan')); }
+      signal.addEventListener('abort', kill, { once: true });
+    }
+    const t0 = Date.now();
+    let out = '', chunk = 1, chunks = 1, phase = 0, done = 0;
+    const PHASES = { Encoding: [0, 0.1], Upscaling: [0.1, 0.3], Decoding: [0.4, 0.6] }; // share of a chunk
+    const onData = (d) => {
+      const s = String(d);
+      out = (out + s).slice(-200_000);
+      for (const m of s.matchAll(/Chunk (\d+)\/(\d+)|(Encoding|Upscaling|Decoding) batch (\d+)\/(\d+)/g)) {
+        if (m[1]) { chunk = Number(m[1]); chunks = Number(m[2]); continue; }
+        const [base, w] = PHASES[m[3]];
+        phase = base + w * ((Number(m[4]) - 1) / Number(m[5]));
+        const pct = Math.min(99, ((chunk - 1 + phase) / chunks) * 100);
+        if (pct <= done) continue;
+        done = pct;
+        const el = (Date.now() - t0) / 1000;
+        onProgress({ stage: 'AI restore', pct, etaSec: pct > 3 ? el * (100 - pct) / pct : 0 });
+      }
+    };
+    p.stdout.on('data', onData);
+    p.stderr.on('data', onData);
+    p.on('error', reject);
+    p.on('close', (code) => {
+      if (signal) signal.removeEventListener('abort', kill);
+      if (signal && signal.aborted) return reject(new Error('dibatalkan'));
+      if (code === 0 && /completed successfully/.test(out)) {
+        return resolve({ seconds: (Date.now() - t0) / 1000, vramOverflow: (out.match(/VRAM overflow/g) || []).length });
+      }
+      const oom = /out of memory|OutOfMemory/i.test(out);
+      const tail = out.split('\n').filter((l) => /ERROR|Error|error/.test(l)).slice(-2).join(' | ');
+      reject(new Error(`SeedVR2 gagal (exit ${code})${oom ? ' - VRAM tak cukup' : ''}: ${tail.slice(0, 300)}`));
+    });
   });
 }
 
@@ -382,13 +474,18 @@ async function enhance({ input, output, jobId, log = console.log, onProgress = (
   const profile = PROFILES[profName || CFG.profile];
   if (!profile) throw new Error(`Profil tak dikenali: ${profName || CFG.profile}`);
   for (const f of [CFG.ffmpeg, CFG.ffprobe, CFG.video2x]) if (!fs.existsSync(f)) throw new Error(`Enjin tiada: ${f}`);
+  const ultra = Boolean(profile.seedShort);
+  if (ultra) seedvr2Ready();
 
-  const dir = path.join(CFG.workRoot, jobId);
+  // separate work dirs so a job that asked for both Premium and Ultra never mixes stages
+  const workKey = ultra ? `${jobId}-ultra` : jobId;
+  const dir = path.join(CFG.workRoot, workKey);
   fs.mkdirSync(dir, { recursive: true });
   const t0 = Date.now();
   const timings = {};
   const gpu = new GpuMonitor(log).start();
-  const report = { profile: profile.name, engines: { ffmpeg: CFG.ffmpeg, video2x: CFG.video2x, rife: CFG.rifeModel } };
+  const report = { profile: profile.name, engines: { ffmpeg: CFG.ffmpeg, video2x: CFG.video2x, rife: CFG.rifeModel,
+    ...(ultra ? { seedvr2: `${SEEDVR2.dit} @${CFG.seedvr2Dir}` } : {}) } };
 
   // stage helper: resumable (marker file next to its output)
   const stage = async (name, file, fn) => {
@@ -412,10 +509,10 @@ async function enhance({ input, output, jobId, log = console.log, onProgress = (
     report.hardware = g ? { vramTotalMB: g.total, vramUsedAtStartMB: g.used } : null;
 
     onProgress({ stage: 'analisis', pct: 0 });
-    const a = await analyze(input, log, signal);
+    const a = await analyze(input, log, signal, ultra ? Math.min(CFG.ultraMaxSeconds, CFG.maxSeconds) : CFG.maxSeconds);
     const p = plan(a, profile);
     report.analysis = a; report.plan = p;
-    log(`pelan: ${p.aiW}x${p.aiH} -> RIFE x${p.mult} -> ${p.srNeeded ? `ESRGAN x4 ${p.srW}x${p.srH} [${p.sr.desc}]` : 'tiada SR'} -> ${p.outW}x${p.outH} @${p.outFpsValue}fps`);
+    log(`pelan: ${p.aiW}x${p.aiH}${p.seed ? ` -> SeedVR2 ${p.seed.w}x${p.seed.h}` : ''} -> RIFE x${p.mult} -> ${p.srNeeded ? `ESRGAN x4 ${p.srW}x${p.srH} [${p.sr.desc}]` : 'tiada SR'} -> ${p.outW}x${p.outH} @${p.outFpsValue}fps`);
 
     // disk check (lossless intermediates + 10-bit master), generous
     const need = p.aiW * p.aiH * 1.5 * 0.5 * (p.frames + p.outFrames) + p.outW * p.outH * p.outFrames * 0.06 + 200e6;
@@ -438,12 +535,37 @@ async function enhance({ input, output, jobId, log = console.log, onProgress = (
       return { frames: await countFrames(prep) };
     });
 
-    // ---- RIFE interpolation (low resolution, cheap, VRAM-safe)
     let cur = prep;
+
+    // ---- Ultra: SeedVR2 restoration (regenerates detail; temporal batches of 5 frames)
+    if (p.seed) {
+      const seedMp4 = path.join(dir, 'seed.mp4');
+      const info = await stage('seed', seedMp4, async () => {
+        const framesDir = path.join(dir, 'seed-frames');
+        fs.rmSync(framesDir, { recursive: true, force: true });
+        const r = await seedvr2({ input: prep, outDir: framesDir, seedShort: p.seed.short, signal, onProgress });
+        const pngDir = path.join(framesDir, 'prep');
+        const n = fs.existsSync(pngDir) ? fs.readdirSync(pngDir).filter((f) => f.endsWith('.png')).length : 0;
+        if (n < p.frames) throw new Error(`SeedVR2 keluarkan ${n} frame, jangka >= ${p.frames}`);
+        // SeedVR2 reads frames with OpenCV, which converts YUV->RGB with the BT.601 matrix. Going
+        // back with the same matrix restores the original YUV values (then tagged BT.709 as before).
+        await ffmpeg(['-y', '-framerate', `${a.fps.num}/${a.fps.den}`, '-i', path.join(pngDir, 'prep_%06d.png'),
+          '-vf', `scale=${p.seed.w}:${p.seed.h}:flags=lanczos:out_color_matrix=bt601:out_range=tv,setsar=1,format=yuv420p`,
+          '-c:v', 'libx264', '-qp', '0', '-preset', 'ultrafast', '-colorspace', 'bt709', '-color_primaries', 'bt709',
+          '-color_trc', 'bt709', seedMp4], { signal });
+        fs.rmSync(framesDir, { recursive: true, force: true });
+        return { frames: n, secPerFrame: +(r.seconds / n).toFixed(2), vramOverflowWarnings: r.vramOverflow };
+      });
+      log(`SeedVR2 ${p.seed.w}x${p.seed.h}: ${info.frames} frame, ${fmtSec(info.seconds)} (${info.secPerFrame}s/frame${info.vramOverflowWarnings ? `, VRAM melimpah ke RAM x${info.vramOverflowWarnings}` : ''})`);
+      cur = seedMp4;
+    }
+
+    // ---- RIFE interpolation (low resolution, cheap, VRAM-safe)
     if (p.mult > 1) {
       const interp = path.join(dir, 'interp.mp4');
+      const rifeIn = cur;
       const info = await stage('rife', interp, async () => {
-        await video2x(['-i', prep, '-o', interp, '-p', 'rife', '-m', String(p.mult), '--rife-model', CFG.rifeModel,
+        await video2x(['-i', rifeIn, '-o', interp, '-p', 'rife', '-m', String(p.mult), '--rife-model', CFG.rifeModel,
           '-t', String(CFG.sceneThresh), ...(p.rifeUhd ? ['--rife-uhd'] : []),
           '-c', 'libx264', '-e', 'qp=0', '-e', 'preset=ultrafast', '--pix-fmt', 'yuv420p', '--no-copy-streams'],
         { cwd: CFG.modelsLive, signal, label: 'interpolasi RIFE', onProgress });
@@ -539,7 +661,7 @@ async function enhance({ input, output, jobId, log = console.log, onProgress = (
     // keep the work dir on failure so the job can resume; clean it on success
     if (report.validation && report.validation.ok && !CFG.keepTemp) {
       fs.mkdirSync(path.join(CFG.workRoot, 'reports'), { recursive: true });
-      fs.copyFileSync(path.join(dir, 'report.json'), path.join(CFG.workRoot, 'reports', `${jobId}.json`));
+      fs.copyFileSync(path.join(dir, 'report.json'), path.join(CFG.workRoot, 'reports', `${workKey}.json`));
       fs.rmSync(dir, { recursive: true, force: true });
     }
   }
@@ -547,10 +669,10 @@ async function enhance({ input, output, jobId, log = console.log, onProgress = (
 
 module.exports = { enhance, analyze, plan, PROFILES, CFG };
 
-// CLI: node premium.js <input> <output> [max|balanced]
+// CLI: node premium.js <input> <output> [max|balanced|ultra]
 if (require.main === module) {
   const [input, output, prof] = process.argv.slice(2);
-  if (!input || !output) { console.error('guna: node premium.js <input> <output> [max|balanced]'); process.exit(2); }
+  if (!input || !output) { console.error('guna: node premium.js <input> <output> [max|balanced|ultra]'); process.exit(2); }
   const ac = new AbortController();
   process.on('SIGINT', () => ac.abort());
   let lastP = 0;

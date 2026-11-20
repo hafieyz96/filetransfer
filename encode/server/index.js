@@ -17,8 +17,9 @@ const RETENTION_MS = Number(process.env.RETENTION_MINUTES || 60) * 60_000;
 const PROCESSING_TIMEOUT_MS = Number(process.env.PROCESSING_TIMEOUT_MINUTES || 30) * 60_000;
 
 // Order matters: the agent works through these in order, standard first.
-const VARIANTS = ['standard', 'premium'];
-const SUFFIX = { standard: 'hd', premium: 'premium' };
+// ultra = SeedVR2 restoration (slow; for small/blurry sources)
+const VARIANTS = ['standard', 'premium', 'ultra'];
+const SUFFIX = { standard: 'hd', premium: 'premium', ultra: 'ultra' };
 
 if (!AGENT_KEY || AGENT_KEY === 'tukar-ini') {
   console.error('AGENT_KEY belum diset (.env). Berhenti.');
@@ -51,8 +52,8 @@ const safeEqual = (a, b) => {
   return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
 };
 function rm(p) { try { fs.unlinkSync(p); } catch { /* already gone */ } }
-// Variants the uploader asked for (jobs from before the choice existed get all of them).
-const wanted = (job) => (job.want && job.want.length ? VARIANTS.filter((v) => job.want.includes(v)) : VARIANTS);
+// Variants the uploader asked for (jobs from before the choice existed get standard + premium).
+const wanted = (job) => (job.want && job.want.length ? VARIANTS.filter((v) => job.want.includes(v)) : ['standard', 'premium']);
 const todo = (job) => wanted(job).filter((v) => !job.files[v] && !job.errors[v]);
 
 // After every variant result: finish the job once nothing is left to do.
@@ -91,7 +92,7 @@ app.post('/upload', (req, res, next) => {
   }
   const v = req.query.variant;
   if (v !== undefined && !isVariant(v)) {
-    return res.status(400).set('Connection', 'close').json({ error: 'Pilihan tak sah (standard atau premium)' });
+    return res.status(400).set('Connection', 'close').json({ error: 'Pilihan tak sah (standard, premium atau ultra)' });
   }
   next();
 }, (req, res) => {
@@ -106,7 +107,7 @@ app.post('/upload', (req, res, next) => {
       id, status: 'queued', createdAt: Date.now(), updatedAt: Date.now(),
       originalName: path.basename(req.file.originalname || 'video').slice(0, 120),
       inputBytes: req.file.size, files: {}, errors: {},
-      want: req.query.variant ? [req.query.variant] : VARIANTS,
+      want: req.query.variant ? [req.query.variant] : ['standard', 'premium'],
     };
     saveJobs();
     res.status(201).json({ id });
@@ -225,7 +226,9 @@ function sweep() {
     if (job.status === 'processing' && now - job.updatedAt > PROCESSING_TIMEOUT_MS) {
       job.status = 'queued'; job.updatedAt = now; changed = true; // agent died, retry what's left
     }
-    if (now - job.createdAt > RETENTION_MS && job.status !== 'processing') {
+    // retention counts from the last change (finish time for done jobs), so a result that took
+    // 40 minutes to make still gets the full RETENTION window before it is deleted
+    if (now - (job.updatedAt || job.createdAt) > RETENTION_MS && job.status !== 'processing') {
       rm(inPath(job.id));
       for (const v of VARIANTS) { rm(outPath(job.id, v)); rm(outPath(job.id, v) + '.part'); }
       delete jobs[job.id]; changed = true;

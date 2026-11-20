@@ -16,6 +16,7 @@
     --fg:#f4f1ea; --muted:#a29e96; --dim:#6e6b65;
     --amber:#f6b33c; --amber-hi:#ffd27a; --amber-ink:#1b1204;
     --teal:#4fd8ca; --red:#ff5d50; --err:#ff8a7a;
+    --violet:#b993ff; --violet-hi:#d9c4ff; --violet-ink:#160b2b;
     --r:20px;
     --display:'Unbounded', system-ui, sans-serif;
     --body:'Manrope', system-ui, sans-serif;
@@ -144,6 +145,13 @@
   .opt.prem:has(input:checked) .tick { border-color:var(--amber); }
   .opt.prem:has(input:checked) .tick::after { background:var(--amber); }
   .opt:has(input:focus-visible) { outline:2px solid var(--fg); outline-offset:2px; }
+  .opt.ult { grid-column:1 / -1; }
+  .opt.ult b { color:var(--violet); }
+  .opt.ult b i { font:500 .62rem/1 var(--mono); letter-spacing:.12em; font-style:normal; color:var(--violet-ink); background:var(--violet); padding:3px 6px; border-radius:5px; margin-left:8px; vertical-align:2px; }
+  .opt.ult .tagline { color:rgba(185,147,255,.8); }
+  .opt.ult:has(input:checked) { border-color:var(--violet); background:linear-gradient(180deg, rgba(185,147,255,.12), rgba(185,147,255,.03)); box-shadow:0 0 0 3px rgba(185,147,255,.12); }
+  .opt.ult:has(input:checked) .tick { border-color:var(--violet); }
+  .opt.ult:has(input:checked) .tick::after { background:var(--violet); }
   input[type=password] { width:100%; padding:14px; border-radius:12px; border:1px solid var(--line); background:#0d0d10; color:var(--fg); font:16px var(--body); }
   input[type=password]::placeholder { color:var(--dim); }
   input[type=password]:focus { outline:none; border-color:var(--amber); box-shadow:0 0 0 3px rgba(246,179,60,.15); }
@@ -170,6 +178,10 @@
   .rc-head { display:flex; justify-content:space-between; align-items:center; font:500 .7rem/1 var(--mono); letter-spacing:.14em; color:var(--muted); }
   .rc-head .tag { color:var(--fg); }
   .rcard.premium .rc-head .tag { color:var(--amber); }
+  .rcard.ultra { border-color:rgba(185,147,255,.45); background:linear-gradient(180deg, rgba(185,147,255,.08), var(--card) 40%); }
+  .rcard.ultra .rc-head .tag { color:var(--violet); }
+  .rcard.ultra .meter i { background:linear-gradient(90deg, #8f6bff, var(--violet-hi)); }
+  .rcard.ultra .btn.main { background:linear-gradient(180deg, var(--violet-hi), var(--violet)); color:var(--violet-ink); }
   .rcard h3 { font-size:1.25rem; margin:12px 0 4px; }
   .rc-state { margin:0; color:var(--muted); font-size:.92rem; min-height:1.4em; }
   .rc-state.err { color:var(--err); }
@@ -205,6 +217,16 @@
   .ba input { position:absolute; left:0; right:0; bottom:0; width:100%; height:40px; opacity:0; margin:0; }
   .ba:focus-within { outline:2px solid var(--amber); outline-offset:3px; }
   .cap { color:var(--dim); font:400 .76rem/1.5 var(--mono); margin:12px 0 0; }
+  .ba-ultra .bar { background:var(--violet); box-shadow:0 0 12px rgba(185,147,255,.8); }
+  .ba-ultra .knob { background:var(--violet); color:var(--violet-ink); }
+  .ba-ultra .lab.r { color:var(--violet); }
+  .ba-ultra:focus-within { outline-color:var(--violet); }
+  .notes { margin:0 0 22px; padding:0; list-style:none; display:grid; gap:10px; }
+  .notes li { position:relative; padding-left:18px; color:var(--muted); font-size:.93rem; }
+  .notes li::before { content:""; position:absolute; left:2px; top:.62em; width:7px; height:7px; border-radius:2px; background:var(--violet); }
+  .notes b { color:var(--fg); font-weight:600; }
+  .t-row.ult .t-bar i { background:linear-gradient(90deg, #8f6bff, var(--violet-hi)); }
+  @media (min-width:900px) { .ultra-sec > :first-child { order:2; } }
 
   /* standard vs premium */
   .vs { border:1px solid var(--line); border-radius:var(--r); overflow:hidden; background:var(--card); }
@@ -279,7 +301,7 @@
     <p class="eyebrow">AI video enhancer · RTX GPU</p>
     <h1>Video kabur?<br><em>Jadikan HD.</em></h1>
     <p class="lede">Upload video, PC kami proses frame demi frame, kemudian simpan terus ke galeri. Sesuai untuk status WhatsApp yang nampak tajam.</p>
-    <div class="chips" aria-hidden="true"><span class="chip">REAL-ESRGAN</span><span class="chip">RIFE 60FPS</span><span class="chip">HEVC 10-BIT</span></div>
+    <div class="chips" aria-hidden="true"><span class="chip">REAL-ESRGAN</span><span class="chip">RIFE 60FPS</span><span class="chip">SEEDVR2</span><span class="chip">HEVC 10-BIT</span></div>
   </section>
 
   <section class="studio" aria-label="Upload video">
@@ -321,6 +343,13 @@
             <small>AI 1440p, 60fps licin. ~15 minit untuk 30s.</small>
             <span class="tagline">AI · UPSCALE</span>
           </label>
+          <label class="opt ult">
+            <input type="radio" name="variant" value="ultra">
+            <span class="tick"></span>
+            <b>Ultra<i>BARU</i></b>
+            <small>Untuk video kabur, kecil atau 3gp. AI cipta semula detail muka dan tekstur, kemudian 4K 60fps. Maks 15 saat, 20-35 minit.</small>
+            <span class="tagline">SEEDVR2 · AI RESTORE · 4K</span>
+          </label>
         </div>
       </fieldset>
       <label class="field-label" for="pw">Kata laluan</label>
@@ -357,6 +386,32 @@
     </div>
   </section>
 
+  <section class="block split ultra-sec" aria-labelledby="ul-h">
+    <div>
+      <p class="eyebrow" style="color:var(--violet)">Ultra · AI restore</p>
+      <h2 id="ul-h">Video 3gp kabur? Ultra bina semula.</h2>
+      <p class="sub">Premium tajamkan apa yang ada. Ultra guna AI diffusion (SeedVR2) yang <b>cipta semula</b> detail yang hilang: muka, rambut, kain. Kemudian dibawa ke 4K 60fps.</p>
+      <ul class="notes">
+        <li><b>Detail dicipta AI.</b> Muka nampak jelas dan natural, tapi mungkin tak 100% sama dengan orang sebenar.</li>
+        <li><b>Teks kecil</b> (subtitle, papan tanda) boleh jadi huruf rawak.</li>
+        <li><b>Maks 15 saat</b>, kira-kira 1.5 hingga 2.5 minit proses untuk setiap saat video.</li>
+        <li>Paling berkesan untuk video <b>480p ke bawah</b>. Video HD dari kamera fon lebih sesuai guna Premium.</li>
+      </ul>
+    </div>
+    <div>
+      <div class="ba ba-ultra">
+        <img src="demo/ultra-before.jpg" alt="Sebelum: video 3gp 256x144, muka kabur" width="720" height="720" loading="lazy">
+        <img class="after" src="demo/ultra-after.jpg" alt="Selepas: hasil Ultra, muka dan rambut jelas" width="720" height="720" loading="lazy">
+        <div class="bar"></div>
+        <div class="knob"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l-6 6 6 6M15 6l6 6-6 6"/></svg></div>
+        <span class="lab l">SEBELUM · 3GP 144p</span>
+        <span class="lab r">ULTRA</span>
+        <input type="range" min="0" max="100" value="50" aria-label="Geser untuk banding 3gp asal dan hasil Ultra">
+      </div>
+      <p class="cap">Frame sebenar: klip 3gp 256x144 (dizoom), dan hasil SeedVR2 frame yang sama.</p>
+    </div>
+  </section>
+
   <section class="block" aria-labelledby="vs-h">
     <p class="eyebrow">Standard vs Premium</p>
     <h2 id="vs-h">Mana satu patut pilih?</h2>
@@ -376,11 +431,13 @@
       <div>
         <div class="times" id="times">
           <p class="eyebrow" style="margin:0">Berapa lama perlu tunggu?</p>
-          <div class="t-row std"><div class="t-top"><b>Standard</b><span>beberapa saat</span></div><div class="t-bar"><i style="--w:3%"></i></div></div>
-          <div class="t-row"><div class="t-top"><b>Premium · video 5s</b><span>~2-3 min</span></div><div class="t-bar"><i style="--w:18%"></i></div></div>
-          <div class="t-row"><div class="t-top"><b>Premium · video 15s</b><span>~7 min</span></div><div class="t-bar"><i style="--w:48%"></i></div></div>
-          <div class="t-row"><div class="t-top"><b>Premium · video 30s</b><span>~15 min</span></div><div class="t-bar"><i style="--w:100%"></i></div></div>
-          <p class="cap" style="margin:4px 0 0">Diukur dengan video 720p 30fps. Video 4K atau lebih panjang ambil masa lebih. Kalau ada job lain dalam queue, ia diproses dulu.</p>
+          <div class="t-row std"><div class="t-top"><b>Standard</b><span>beberapa saat</span></div><div class="t-bar"><i style="--w:2%"></i></div></div>
+          <div class="t-row"><div class="t-top"><b>Premium · video 5s</b><span>~2-3 min</span></div><div class="t-bar"><i style="--w:10%"></i></div></div>
+          <div class="t-row"><div class="t-top"><b>Premium · video 15s</b><span>~7 min</span></div><div class="t-bar"><i style="--w:28%"></i></div></div>
+          <div class="t-row"><div class="t-top"><b>Premium · video 30s</b><span>~15 min</span></div><div class="t-bar"><i style="--w:60%"></i></div></div>
+          <div class="t-row ult"><div class="t-top"><b>Ultra · video 5s</b><span>~8-14 min</span></div><div class="t-bar"><i style="--w:36%"></i></div></div>
+          <div class="t-row ult"><div class="t-top"><b>Ultra · video 15s</b><span>~20-35 min</span></div><div class="t-bar"><i style="--w:100%"></i></div></div>
+          <p class="cap" style="margin:4px 0 0">Premium diukur dengan video 720p 30fps, Ultra dengan video kecil 30fps. Video 4K atau lebih panjang ambil masa lebih. Kalau ada job lain dalam queue, ia diproses dulu.</p>
         </div>
       </div>
     </div>
@@ -401,8 +458,9 @@
     <p class="eyebrow">Soalan lazim</p>
     <h2 id="faq-h">Perlu tahu.</h2>
     <div class="faq" style="margin-top:22px">
-      <details><summary>Boleh tutup page masa tunggu?</summary><p>Boleh. Buka semula link ini di browser yang sama dan hasil anda akan muncul semula. Hasil disimpan 60 minit sahaja, kemudian dipadam.</p></details>
-      <details><summary>Video panjang macam mana?</summary><p>Hanya 30 saat pertama diproses, sama dengan had status WhatsApp. Saiz fail maksimum 100MB.</p></details>
+      <details><summary>Boleh tutup page masa tunggu?</summary><p>Boleh. Buka semula link ini di browser yang sama dan hasil anda akan muncul semula. Hasil disimpan 60 minit selepas siap, kemudian dipadam.</p></details>
+      <details><summary>Kenapa muka dalam hasil Ultra nampak lain sikit?</summary><p>Video kecil seperti 3gp cuma ada beberapa piksel untuk satu muka. Ultra mencipta semula detail yang hilang supaya nampak jelas, jadi rupa akhir ialah tekaan AI yang paling munasabah, bukan rakaman asal. Untuk video penting, simpan juga fail asal.</p></details>
+      <details><summary>Video panjang macam mana?</summary><p>Hanya 30 saat pertama diproses (Ultra: 15 saat), sama dengan had status WhatsApp. Saiz fail maksimum 100MB.</p></details>
       <details><summary>Kenapa Premium lama?</summary><p>Setiap frame dibesarkan oleh model AI di GPU, dan frame baru dijana untuk 60fps. Video 30s jadi 1,800 frame 1440p. Hasil akhir juga diuji kualitinya (VMAF) sebelum dihantar.</p></details>
       <details><summary>Video saya selamat?</summary><p>Video hanya diproses untuk anda. Link hasil adalah rawak dan fail hasil dipadam selepas 60 minit. Video asal dipadam sebaik sahaja siap diproses.</p></details>
       <details><summary>Lepas upload ke WhatsApp jadi kabur balik?</summary><p>WhatsApp tetap mampat semula video. Video yang lebih tajam dan bersih dari awal biasanya kekal nampak lebih baik selepas mampatan.</p></details>
@@ -415,8 +473,8 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const VARIANTS = ['standard', 'premium'];
-const LABEL = { standard: 'Standard', premium: 'Premium' };
+const VARIANTS = ['standard', 'premium', 'ultra'];
+const LABEL = { standard: 'Standard', premium: 'Premium', ultra: 'Ultra' };
 const store = {
   get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
@@ -489,16 +547,33 @@ document.querySelectorAll('input[name=variant]').forEach((r) => r.addEventListen
 function updateButton() {
   if (busy) return;
   $('go').disabled = !file;
-  $('go-text').textContent = !file ? 'Pilih video dulu' : chosen() === 'premium' ? 'Upload & enhance Premium' : 'Upload & enhance';
+  const v = chosen();
+  $('go-text').textContent = !file ? 'Pilih video dulu' : v === 'standard' ? 'Upload & enhance' : `Upload & enhance ${LABEL[v]}`;
 }
 function updateHint() {
   const h = $('hint');
   h.className = 'hint';
-  if (!file) { h.textContent = 'Premium ambil masa lebih lama, tapi hasilnya jauh lebih tajam.'; return; }
+  const v = chosen();
+  if (!file) {
+    h.textContent = v === 'ultra' ? 'Ultra paling berkesan untuk video kabur, kecil atau 3gp. Maks 15 saat.'
+      : 'Premium ambil masa lebih lama, tapi hasilnya jauh lebih tajam.';
+    return;
+  }
   if (file.size > maxMB * 1048576) { h.className = 'hint warn'; h.textContent = `Fail ${(file.size / 1048576).toFixed(0)}MB melebihi had ${maxMB}MB.`; return; }
+  if (v === 'ultra') {
+    // measured on the 2060 (30fps source): SeedVR2 2.3-4.5 s/frame at 480p (depends on free VRAM)
+    // + RIFE/upscale/encode, so show a range rather than one number
+    const d = Math.min(fileDur || 15, 15);
+    const lo = Math.max(3, Math.round(d * 1.2 + 2)), hi = Math.max(5, Math.round(d * 2.2 + 3));
+    const short = prev.videoWidth ? Math.min(prev.videoWidth, prev.videoHeight) : 0;
+    const hd = short >= 720 ? ` Video ni dah ${short}p: Ultra paling berkesan untuk video kabur atau kecil, Premium mungkin cukup.` : '';
+    h.className = hd ? 'hint warn' : 'hint';
+    h.textContent = `Anggaran kasar: ${lo}-${hi} min untuk ${d.toFixed(0)}s.${fileDur > 15 ? ' Hanya 15 saat pertama diproses.' : ''}${hd} Boleh tutup page dan datang balik.`;
+    return;
+  }
   const d = Math.min(fileDur || 0, 30);
   const cut = fileDur > 30 ? ' Hanya 30 saat pertama diproses.' : '';
-  if (chosen() === 'standard') { h.textContent = 'Anggaran: beberapa saat selepas upload.' + cut; return; }
+  if (v === 'standard') { h.textContent = 'Anggaran: beberapa saat selepas upload.' + cut; return; }
   const min = d ? Math.max(1, Math.round(d * 0.5)) : null;
   h.textContent = (min ? `Anggaran kasar: ~${min} min untuk video ${d.toFixed(0)}s.` : 'Anggaran: ~15 min untuk video 30s.') + cut + ' Boleh tutup page dan datang balik.';
 }
@@ -511,8 +586,10 @@ $('f').addEventListener('submit', (e) => {
   if (file.size > maxMB * 1048576) return say(`Fail melebihi ${maxMB}MB.`, true);
   try { localStorage.setItem('pw', $('pw').value); } catch {}
   const variant = chosen();
+  clearResults(); // a finished result from the previous video makes way for the new one
   setBusy(true, 'Memuat naik 0%');
   const fd = new FormData(); fd.append('video', file);
+  input.value = ''; // so picking the same file again later still fires "change"
   const xhr = new XMLHttpRequest();
   xhr.open('POST', '/upload?variant=' + variant);
   xhr.setRequestHeader('x-upload-password', $('pw').value);
@@ -567,13 +644,20 @@ function againButton() {
   $('results').append(b);
 }
 
-function resetAll() {
+function clearResults() {
   tracking++; // stops the running poll loop
   store.del('job');
   for (const k of Object.keys(cards)) delete cards[k];
   $('results').innerHTML = '';
+}
+
+// "Upload video lain": clear the old result and open the picker straight away
+function resetAll() {
+  clearResults();
   setBusy(false);
   window.scrollTo({ top: vf.getBoundingClientRect().top + scrollY - 80, behavior: 'smooth' });
+  input.value = '';
+  input.click();
 }
 
 const fmtTime = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
@@ -612,7 +696,7 @@ async function track(job, scroll) {
     });
     if (first && scroll) { first = false; cards[list[0]] && cards[list[0]].el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
     first = false;
-    if (!pending) { againButton(); $('go-text').textContent = 'Siap · lihat hasil di bawah'; return; }
+    if (!pending) { againButton(); setBusy(false); return; } // finished: the viewfinder takes a new video again
     await sleep(2000);
   }
 }
@@ -620,7 +704,7 @@ async function track(job, scroll) {
 function showDone(c, v, url, name) {
   c.done = true;
   c.h.textContent = 'Siap!';
-  c.s.textContent = v === 'premium' ? 'Video Premium anda sedia.' : 'Video anda sedia.';
+  c.s.textContent = v === 'standard' ? 'Video anda sedia.' : `Video ${LABEL[v]} anda sedia.`;
   c.m.classList.remove('indet'); c.m.firstChild.style.width = '100%';
   c.o.innerHTML = '';
   const vid = document.createElement('video');
@@ -653,13 +737,13 @@ async function offerSave(v, url, box, before) {
 (function resume() {
   const job = store.get('job');
   if (!job || !job.id) return;
-  if (Date.now() - job.t > 65 * 60000) return store.del('job');
+  if (Date.now() - job.t > 6 * 3600000) return store.del('job'); // the server answers 404 once it is gone
   track(job, false);
 })();
 
-/* ---------- before / after slider ---------- */
-(function compare() {
-  const ba = $('ba'), range = $('ba-range');
+/* ---------- before / after sliders ---------- */
+document.querySelectorAll('.ba').forEach(function compare(ba) {
+  const range = ba.querySelector('input[type=range]');
   let touched = false;
   const set = (p) => { p = Math.max(0, Math.min(100, p)); ba.style.setProperty('--pos', p + '%'); range.value = p; };
   const fromEvent = (e) => { const r = ba.getBoundingClientRect(); set((e.clientX - r.left) / r.width * 100); };
@@ -691,7 +775,7 @@ async function offerSave(v, url, box, before) {
     })(t0);
   }, { threshold: .6 });
   io.observe(ba);
-})();
+});
 
 // timing bars animate in when visible
 (function () {

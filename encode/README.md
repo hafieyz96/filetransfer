@@ -72,7 +72,7 @@ analisis -> prep (ffmpeg) -> RIFE interpolasi (Video2X) -> Real-ESRGAN x4 (Video
 | Prep | ffmpeg n8.1 | potong ke `MAX_SECONDS`, autorotate, piksel persegi, HDR->SDR (zscale+hable), matriks BT.709, CFR, saiz input AI, pad 8 frame |
 | Interpolasi | Video2X 6.4.0, RIFE v4.26 (Vulkan FP16) | x2/x4/x5 ke ~120fps (`max`) atau ~60fps (`balanced`), pengesanan babak 20% |
 | Super-resolusi | Video2X, **realesr-general-x4v3** (ditukar dari berat rasmi) | x4, denoise 0.25/0.50/0.75 ikut analisis; master HEVC 10-bit cq12 |
-| Encode | ffmpeg hevc_nvenc p7, multipass, spatial+temporal AQ, B-ref, `hvc1` | calon cq30, 33, 36, 39 (atau turun); fail **terkecil** dengan VMAF >= 95 vs master dipilih |
+| Encode | ffmpeg hevc_nvenc p7, multipass, spatial+temporal AQ, B-ref, `hvc1` | calon cq30, 33, 36, 39 (atau turun); fail **terkecil** dengan VMAF >= 97 vs master dipilih (`PREMIUM_VMAF_MIN`) |
 | Pengesahan | ffprobe + decode penuh (NVDEC) | resolusi, DAR, piksel persegi, fps, tempoh, bilangan frame, audio, decode bersih, tiada border baru, 10-bit, warna setia |
 
 Profil (`PREMIUM_PROFILE`):
@@ -141,10 +141,51 @@ D:\encode-work\pyenv\Scripts\python agent\tools\convert_realesr_general.py <fold
 Uji: `node agent/premium.js <input> <output> [max|balanced]` atau `node agent/tools/run-tests.js <folder> <out> max`.
 Laporan setiap job (masa, fps, VRAM puncak, suhu, calon VMAF, semakan) disimpan di `PREMIUM_WORK_DIR/reports/`.
 
+## Ultra: SeedVR2 restore untuk video kabur/kecil (agent/premium.js, profil `ultra`)
+
+```
+analisis -> prep (kecilkan sahaja) -> SeedVR2 3B 480p -> RIFE 60fps -> Real-ESRGAN x4 (ringan) -> 4K -> tangga HEVC VMAF -> pengesahan
+```
+
+Premium cuma tajamkan detail yang ada. Ultra guna **SeedVR2** (ByteDance, diffusion satu langkah, Apache-2.0)
+yang **cipta semula** detail yang hilang (muka, rambut, kain), diproses 5 frame sekali supaya tak berkelip.
+Ditawarkan di page sebagai pilihan ketiga; maks `ULTRA_MAX_SECONDS` (15) saat.
+
+**Diukur pada RTX 2060 6GB** (3B fp16, BlockSwap 32, VAE tiled):
+
+| Ujian | Hasil |
+|---|---|
+| bfloat16 (default kod SeedVR2) | OOM selepas 17 min untuk 30 frame. Turing cuma emulasi bf16 |
+| fp16, output 576p | 7.7 s/frame, wajah setia |
+| fp16, output 480p, jubin decode 512 | 4.1 s/frame; kadang-kadang 3-5x lebih lambat (VRAM melimpah ke RAM) |
+| fp16, output 480p, jubin decode 384 | **2.3-3.1 s/frame**, tiada limpahan (default) |
+| fp16, output 360p + ESRGAN | 1.85 s/frame tapi **wajah bertukar jadi orang lain** (ditolak) |
+| E2E 3gp 256x144 2s -> 3840x2160@60 | 3.1 min, VRAM puncak 5.6GB, 12/12 semakan lulus, VMAF 97.0 |
+| E2E WhatsApp 360x640 kabur 3s -> 2160x3840@60 | 5.5 min, 5.7GB, 12/12 lulus, VMAF 97.5 |
+
+Had yang jujur: detail **dicipta** (muka mungkin tak 100% sama dengan orang sebenar), teks kecil jadi huruf
+rawak, ~2 min proses untuk setiap saat video. Video 1080p/4K dari kamera fon tak perlu Ultra (guna Premium).
+
+**Pasang (sekali, ~10GB, di luar repo):**
+
+```powershell
+git clone --depth 1 https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler D:\encode-work\seedvr2\src
+py -3.12 -m venv D:\encode-work\seedvr2\venv   # atau python.exe 3.12 penuh
+D:\encode-work\seedvr2\venv\Scripts\pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+#   pasang src\requirements.txt tanpa baris torch/torchvision
+# model ke D:\encode-work\seedvr2\models\SEEDVR2 dari huggingface.co/numz/SeedVR2_comfyUI:
+#   seedvr2_ema_3b_fp16.safetensors (6.78GB, sha256 2fd0e03a...2b304)
+#   ema_vae_fp16.safetensors (501MB, sha256 20678548...12ca1)
+```
+
+Kod upstream **tidak diubah**. `agent/tools/seedvr2_run.py` paksa fp16 pada GPU tanpa bf16 asli (compute < 8.0)
+sebelum pipeline SeedVR2 diimport. Tetapan: `SEEDVR2_DIR`, `ULTRA_MAX_SECONDS`, `ULTRA_DECODE_TILE` (384),
+`ULTRA_CHUNK_FRAMES` (150, had RAM). Uji: `node agent/premium.js <input> <output> ultra`.
+
 ## Keselamatan dan had
 
-- Link download guna ID rawak 128-bit (sesiapa ada link boleh muat turun). Fail dipadam selepas
-  `RETENTION_MINUTES` (60).
+- Link download guna ID rawak 128-bit (sesiapa ada link boleh muat turun). Fail dipadam
+  `RETENTION_MINUTES` (60) selepas job siap (bukan selepas upload, supaya hasil Ultra yang lama tak hilang awal).
 - Upload dihadkan `MAX_UPLOAD_MB` (100), video sahaja, dan perlukan `UPLOAD_PASSWORD`.
   Password disimpan di browser (localStorage) untuk senang.
 - Job "processing" tanpa heartbeat dari agent selama `PROCESSING_TIMEOUT_MINUTES` (30) dikembalikan ke

@@ -85,7 +85,7 @@ let nvencBroken = false; // once NVENC fails (old driver etc.) stop retrying it 
 let currentAbort = null;  // lets Ctrl+C stop a long premium job cleanly (work dir kept for resume)
 
 async function encode(input, output, caps, variant, job) {
-  if (variant === 'premium') return encodePremium(input, output, job);
+  if (variant === 'premium' || variant === 'ultra') return encodePremium(input, output, job, variant);
   const wantGpu = !nvencBroken && (ENCODER === 'nvenc' || (ENCODER === 'auto' && caps.nvenc));
   if (wantGpu) {
     try { return await runFfmpeg(buildArgs(input, output, true, variant)); }
@@ -99,20 +99,22 @@ async function encode(input, output, caps, variant, job) {
   await runFfmpeg(buildArgs(input, output, false, variant));
 }
 
-async function encodePremium(input, output, job) {
+// premium = PREMIUM_PROFILE (balanced/max); ultra = SeedVR2 restoration + the same AI chain
+async function encodePremium(input, output, job, variant) {
   const tag = job.id.slice(0, 8);
   currentAbort = new AbortController();
   let last = 0;
   const report = (text) => {
     // heartbeat: keeps the job alive on the server (long jobs) and shows progress in the page
-    api('POST', `/agent/progress/${job.id}/premium`, {
+    api('POST', `/agent/progress/${job.id}/${variant}`, {
       headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }),
     }).catch(() => {});
   };
   try {
     const r = await premium.enhance({
       input, output, jobId: job.id, signal: currentAbort.signal,
-      log: (m) => log(`${tag} premium: ${m}`),
+      profile: variant === 'ultra' ? 'ultra' : undefined,
+      log: (m) => log(`${tag} ${variant}: ${m}`),
       onProgress: (p) => {
         if (Date.now() - last < 10_000) return;
         last = Date.now();
@@ -121,7 +123,7 @@ async function encodePremium(input, output, job) {
       },
     });
     const o = r.validation.output;
-    log(`${tag} premium: ${o.width}x${o.height} ${o.fps.toFixed(2)}fps VMAF ${r.encode.chosen.vmaf} ` +
+    log(`${tag} ${variant}: ${o.width}x${o.height} ${o.fps.toFixed(2)}fps VMAF ${r.encode.chosen.vmaf} ` +
       `${(o.sizeBytes / 1048576).toFixed(1)}MB, ${Math.round(r.totalSeconds)}s, VRAM puncak ${r.gpu.peakVramMB}MB`);
   } finally {
     currentAbort = null;
