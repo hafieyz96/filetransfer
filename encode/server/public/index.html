@@ -347,7 +347,7 @@
             <input type="radio" name="variant" value="ultra">
             <span class="tick"></span>
             <b>Ultra<i>BARU</i></b>
-            <small>Untuk video kabur, kecil atau 3gp. AI cipta semula detail muka dan tekstur, kemudian 4K 60fps. Maks 15 saat, 20-35 minit.</small>
+            <small>Untuk video kabur, kecil atau 3gp. AI cipta semula detail muka dan tekstur, kemudian 4K 60fps. Maks 15 saat, 17-25 minit.</small>
             <span class="tagline">SEEDVR2 · AI RESTORE · 4K</span>
           </label>
         </div>
@@ -394,7 +394,7 @@
       <ul class="notes">
         <li><b>Detail dicipta AI.</b> Muka nampak jelas dan natural, tapi mungkin tak 100% sama dengan orang sebenar.</li>
         <li><b>Teks kecil</b> (subtitle, papan tanda) boleh jadi huruf rawak.</li>
-        <li><b>Maks 15 saat</b>, kira-kira 1.5 hingga 2.5 minit proses untuk setiap saat video.</li>
+        <li><b>Maks 15 saat</b>, kira-kira 1 hingga 1.5 minit proses untuk setiap saat video.</li>
         <li>Paling berkesan untuk video <b>480p ke bawah</b>. Video HD dari kamera fon lebih sesuai guna Premium.</li>
       </ul>
     </div>
@@ -435,8 +435,8 @@
           <div class="t-row"><div class="t-top"><b>Premium · video 5s</b><span>~2-3 min</span></div><div class="t-bar"><i style="--w:10%"></i></div></div>
           <div class="t-row"><div class="t-top"><b>Premium · video 15s</b><span>~7 min</span></div><div class="t-bar"><i style="--w:28%"></i></div></div>
           <div class="t-row"><div class="t-top"><b>Premium · video 30s</b><span>~15 min</span></div><div class="t-bar"><i style="--w:60%"></i></div></div>
-          <div class="t-row ult"><div class="t-top"><b>Ultra · video 5s</b><span>~8-14 min</span></div><div class="t-bar"><i style="--w:36%"></i></div></div>
-          <div class="t-row ult"><div class="t-top"><b>Ultra · video 15s</b><span>~20-35 min</span></div><div class="t-bar"><i style="--w:100%"></i></div></div>
+          <div class="t-row ult"><div class="t-top"><b>Ultra · video 5s</b><span>~7-10 min</span></div><div class="t-bar"><i style="--w:36%"></i></div></div>
+          <div class="t-row ult"><div class="t-top"><b>Ultra · video 15s</b><span>~17-25 min</span></div><div class="t-bar"><i style="--w:100%"></i></div></div>
           <p class="cap" style="margin:4px 0 0">Premium diukur dengan video 720p 30fps, Ultra dengan video kecil 30fps. Video 4K atau lebih panjang ambil masa lebih. Kalau ada job lain dalam queue, ia diproses dulu.</p>
         </div>
       </div>
@@ -564,7 +564,8 @@ function updateHint() {
     // measured on the 2060 (30fps source): SeedVR2 2.3-4.5 s/frame at 480p (depends on free VRAM)
     // + RIFE/upscale/encode, so show a range rather than one number
     const d = Math.min(fileDur || 15, 15);
-    const lo = Math.max(3, Math.round(d * 1.2 + 2)), hi = Math.max(5, Math.round(d * 2.2 + 3));
+    // measured: 6.4s 4K iPhone clip = 8.6 min (SeedVR2 1.74 s/frame at 480p, Q8, VRAM cap)
+    const lo = Math.max(3, Math.round(d * 1.0 + 2)), hi = Math.max(5, Math.round(d * 1.5 + 3));
     const short = prev.videoWidth ? Math.min(prev.videoWidth, prev.videoHeight) : 0;
     const hd = short >= 720 ? ` Video ni dah ${short}p: Ultra paling berkesan untuk video kabur atau kecil, Premium mungkin cukup.` : '';
     h.className = hd ? 'hint warn' : 'hint';

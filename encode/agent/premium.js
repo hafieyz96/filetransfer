@@ -28,6 +28,7 @@ const CFG = {
   content: (process.env.PREMIUM_CONTENT || 'auto').toLowerCase(),
   codec: (process.env.PREMIUM_CODEC || 'hevc').toLowerCase(),
   vmafMin: Number(process.env.PREMIUM_VMAF_MIN || 97),
+  ladder: (process.env.PREMIUM_LADDER || 'fast').toLowerCase(), // fast = predict q from 1st VMAF; full = step by 3
   keepTemp: process.env.PREMIUM_KEEP_TEMP === '1',
   maxSeconds: Number(process.env.MAX_SECONDS || 30),
   rifeModel: process.env.PREMIUM_RIFE_MODEL || 'rife-v4.26',
@@ -37,18 +38,23 @@ const CFG = {
   seedvr2Dir: process.env.SEEDVR2_DIR || 'D:/encode-work/seedvr2',
   ultraMaxSeconds: Number(process.env.ULTRA_MAX_SECONDS || 15),
   ultraDecodeTile: Number(process.env.ULTRA_DECODE_TILE || 384),
+  ultraEncodeTile: Number(process.env.ULTRA_ENCODE_TILE || 384), // 512 needs more than the VRAM cap allows
   // one batch per chunk: larger chunks keep every batch's latents on the GPU and spill ~2GB into
   // shared memory on a 6GB card (a 200-frame clip ran >30 min vs 2.6 s/frame with chunk = batch)
   ultraChunk: Number(process.env.ULTRA_CHUNK_FRAMES || 33),
   ultraBatch: Number(process.env.ULTRA_BATCH_FRAMES || 33), // 4n+1; see seedvr2()
   ultraAnchorSigma: Number(process.env.ULTRA_ANCHOR_SIGMA ?? 3), // 0 = off (raw SeedVR2 output)
   ultraTemporal: Number(process.env.ULTRA_TEMPORAL ?? 4), // hqdn3d temporal strength, 0 = off
+  ultraBlockSwap: Number(process.env.ULTRA_BLOCKSWAP ?? 32), // DiT blocks kept in RAM (0-32)
 };
 const SEEDVR2 = {
   python: path.join(CFG.seedvr2Dir, 'venv', 'Scripts', 'python.exe'),
   repo: path.join(CFG.seedvr2Dir, 'src'),
   models: path.join(CFG.seedvr2Dir, 'models', 'SEEDVR2'),
-  dit: 'seedvr2_ema_3b_fp16.safetensors',
+  // Q8_0 GGUF: same output as fp16 (SSIM 0.9992, PSNR 58 dB on 208 frames), half the RAM; with
+  // fp16 the SeedVR2 process committed ~24GB on a 16GB PC and Windows paged heavily
+  dit: process.env.ULTRA_DIT_MODEL || (fs.existsSync(path.join(CFG.seedvr2Dir, 'models', 'SEEDVR2', 'seedvr2_ema_3b-Q8_0.gguf'))
+    ? 'seedvr2_ema_3b-Q8_0.gguf' : 'seedvr2_ema_3b_fp16.safetensors'),
   wrapper: path.join(__dirname, 'tools', 'seedvr2_run.py'),
 };
 
@@ -61,7 +67,10 @@ const PROFILES = {
   // SeedVR2 restores/regenerates detail at seedShort (480-576p: ~2-3 s/frame on the 2060 with
   // 33-frame batches; 360p was faster but changed identities), then a temporal stabiliser,
   // Real-ESRGAN x4 + lanczos to 4K.
-  ultra: { name: 'ultra', targetShort: 2160, fps: 60, aiMaxShort: 576, seedShort: 480, seedMaxShort: 576 },
+  // seedMaxShort 480 (was 576): 1.34x faster SeedVR2 on a 1080x1920 face clip, same identity,
+  // eyelashes marginally softer; ULTRA_SEED_MAX_SHORT=576 restores the old size.
+  ultra: { name: 'ultra', targetShort: 2160, fps: 60, aiMaxShort: 576, seedShort: 480,
+    seedMaxShort: Number(process.env.ULTRA_SEED_MAX_SHORT || 480) },
 };
 
 // Video2X only accepts fixed model names; models-live/ maps them to realesr-general-x4v3 at
@@ -313,17 +322,18 @@ function seedvr2Ready() {
 }
 
 // Runs SeedVR2 on `input`, writing PNG frames to outDir/<input basename>/.
-// Settings measured on the RTX 2060 6GB: 3B fp16 + full BlockSwap (weights stay in RAM), VAE
-// tiled; decode tiles above ~400px spill into Windows shared memory and run 3-5x slower.
+// Settings measured on the RTX 2060 6GB + 16GB RAM: 3B with full BlockSwap (weights stay in RAM),
+// VAE tiled, PyTorch VRAM capped by tools/seedvr2_run.py (without the cap the driver spills into
+// shared memory and a 33-frame decode takes 4-8 min instead of 40 s).
 function seedvr2({ input, outDir, seedShort, signal, onProgress }) {
   const args = [SEEDVR2.wrapper, SEEDVR2.repo, input, '--output', outDir, '--output_format', 'png',
     '--model_dir', SEEDVR2.models, '--dit_model', SEEDVR2.dit, '--resolution', String(seedShort),
-    // Each VAE decode batch costs ~45 s of fixed overhead on the 2060, whatever its length: 33-frame
-    // batches ran 2.3 s/frame vs 12 s/frame with 5, and have fewer batch-edge jumps. --uniform_batch_size
+    // 33-frame batches: fewer batch-edge jumps and less per-batch overhead than 5. --uniform_batch_size
     // pads the last batch so it is not a tiny, inconsistent one.
-    '--batch_size', String(CFG.ultraBatch), '--uniform_batch_size', '--blocks_to_swap', '32', '--swap_io_components',
-    '--dit_offload_device', 'cpu', '--vae_offload_device', 'cpu',
-    '--vae_encode_tiled', '--vae_encode_tile_size', '512', '--vae_encode_tile_overlap', '32',
+    '--batch_size', String(CFG.ultraBatch), '--uniform_batch_size', '--blocks_to_swap', String(CFG.ultraBlockSwap), '--swap_io_components',
+    // keep the models between chunks instead of rebuilding them for every 33 frames
+    '--dit_offload_device', 'cpu', '--vae_offload_device', 'cpu', '--cache_dit', '--cache_vae',
+    '--vae_encode_tiled', '--vae_encode_tile_size', String(CFG.ultraEncodeTile), '--vae_encode_tile_overlap', '32',
     '--vae_decode_tiled', '--vae_decode_tile_size', String(CFG.ultraDecodeTile), '--vae_decode_tile_overlap', '32',
     '--chunk_size', String(CFG.ultraChunk), '--color_correction', 'lab'];
   return new Promise((resolve, reject) => {
@@ -659,7 +669,28 @@ async function enhance({ input, output, jobId, log = console.log, onProgress = (
     };
     let best = null;
     let t = await tryQ(ladder.start);
-    if (t.vmaf >= CFG.vmafMin) {
+    if (CFG.ladder === 'fast') {
+      // VMAF falls ~0.5-0.65 per q step on these masters (22 past jobs, HEVC NVENC), so one
+      // measurement predicts the target q; a second encode confirms it. 2 encodes instead of 3-5.
+      const slope = codec === 'av1' ? 0.45 : 0.6;
+      const gap = t.vmaf - CFG.vmafMin;
+      if (gap >= 0) {
+        best = t;
+        const step = Math.min(6, Math.floor(gap / slope));
+        if (step >= 1) {
+          const n = await tryQ(Math.min(ladder.max, t.q + step));
+          if (n.vmaf >= CFG.vmafMin) best = n;
+        }
+      } else {
+        for (let q = t.q - Math.min(6, Math.max(1, Math.ceil(-gap / slope))); q >= ladder.min; q -= ladder.step) {
+          const prev = t;
+          t = await tryQ(q);
+          if (t.vmaf >= CFG.vmafMin) { best = t; break; }
+          if (t.bytes < prev.bytes * 1.01) { log(`had bitrate encoder dicapai (${mb(t.bytes)}), berhenti di q${q}`); break; }
+        }
+        if (!best) best = tries.reduce((x, y) => (y.vmaf > x.vmaf ? y : x));
+      }
+    } else if (t.vmaf >= CFG.vmafMin) {
       best = t;
       for (let q = ladder.start + ladder.step; q <= ladder.max; q += ladder.step) {
         const n = await tryQ(q);

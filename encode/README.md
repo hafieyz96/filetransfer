@@ -165,7 +165,32 @@ Ditawarkan di page sebagai pilihan ketiga; maks `ULTRA_MAX_SECONDS` (15) saat.
 | E2E WhatsApp 360x640 kabur 3s -> 2160x3840@60 | 5.5 min, 5.7GB, 12/12 lulus, VMAF 97.5 |
 
 Had yang jujur: detail **dicipta** (muka mungkin tak 100% sama dengan orang sebenar), teks kecil jadi huruf
-rawak, ~2 min proses untuk setiap saat video. Video 1080p/4K dari kamera fon tak perlu Ultra (guna Premium).
+rawak, ~1-1.5 min proses untuk setiap saat video. Video 1080p/4K dari kamera fon tak perlu Ultra (guna Premium).
+
+**Kelajuan** (video iPhone 4K portrait 6.4 s, 200 frame -> 2160x3840@60, RTX 2060 6GB + 16GB RAM):
+
+| Versi | SeedVR2 | Jumlah |
+|---|---|---|
+| batch 5, chunk 150, `--debug`, fp16 576p | 7.6-9.2 s/frame | 29-35 min |
+| batch 33, chunk 33, fp16 576p | 7.7 s/frame | 30.5 min |
+| **+ had VRAM, cache model, Q8 GGUF, 480p, tangga encode pantas** | **1.74 s/frame** | **8.6 min** |
+
+Punca kelambatan lama (diukur dengan pemantau RAM/GPU):
+- **VRAM tumpah ke RAM.** Windows tak gagalkan peruntukan bila VRAM penuh, ia tumpahkan ke memori kongsi
+  melalui PCIe, jadi PyTorch tak pernah buang cache: decode VAE chunk ke-2 dan seterusnya ambil 4-8 min
+  (chunk 1: 36 s). `tools/seedvr2_run.py` hadkan PyTorch kepada VRAM bebas tolak `SEEDVR2_VRAM_HEADROOM_MB`
+  (300); decode stabil 38-41 s setiap chunk, memori kongsi kekal ~120MB.
+- **RAM 16GB.** Proses SeedVR2 fp16 commit 22-25GB (berat DiT disimpan dalam RAM untuk BlockSwap) di
+  samping app lain (~12GB), jadi Windows paging sampai 350k page/s. Q8_0 GGUF: commit 14GB, RAM bebas tak
+  turun bawah 1.8GB, output sama dengan fp16 (SSIM 0.9992, PSNR 58 dB, 208 frame).
+- `--cache_dit --cache_vae`: model tak dibina semula untuk setiap chunk.
+- 480p berbanding 576p: SeedVR2 1.34x lebih laju, muka sama (bulu mata sedikit lembut).
+- `--debug` lambatkan SeedVR2 ~1.8x (dibuang).
+- Tangga encode `fast`: VMAF jatuh ~0.6 setiap q (22 job lepas), jadi q sasaran dianggar dari calon pertama
+  dan disahkan sekali (2 encode, bukan 3-5).
+
+Tetap berhati-hati: dua proses SeedVR2 serentak (contoh dua agent) tak muat dalam 16GB RAM; jalankan satu
+agent sahaja.
 
 **Pasang (sekali, ~10GB, di luar repo):**
 
@@ -177,13 +202,15 @@ D:\encode-work\seedvr2\venv\Scripts\pip install torch torchvision --index-url ht
 # model ke D:\encode-work\seedvr2\models\SEEDVR2 dari huggingface.co/numz/SeedVR2_comfyUI:
 #   seedvr2_ema_3b_fp16.safetensors (6.78GB, sha256 2fd0e03a...2b304)
 #   ema_vae_fp16.safetensors (501MB, sha256 20678548...12ca1)
+# disyorkan (dipilih automatik jika ada), dari huggingface.co/AInVFX/SeedVR2_comfyUI:
+#   seedvr2_ema_3b-Q8_0.gguf (3.66GB, sha256 be0d6008...cbd96)
 ```
 
 Kod upstream **tidak diubah**. `agent/tools/seedvr2_run.py` paksa fp16 pada GPU tanpa bf16 asli (compute < 8.0)
-sebelum pipeline SeedVR2 diimport. Tetapan: `SEEDVR2_DIR`, `ULTRA_MAX_SECONDS`, `ULTRA_DECODE_TILE` (384),
-`ULTRA_BATCH_FRAMES` (33), `ULTRA_CHUNK_FRAMES` (33), `ULTRA_ANCHOR_SIGMA` (3), `ULTRA_TEMPORAL` (4).
-Chunk mesti sama dengan batch: chunk 150 simpan semua latent dalam VRAM dan melimpah ~2GB ke RAM kongsi
-(klip 200 frame >30 min); chunk 33 = 97 frame dalam 254 s (2.6 s/frame), tiada limpahan.
+dan hadkan VRAM PyTorch sebelum pipeline SeedVR2 diimport. Tetapan: `SEEDVR2_DIR`, `ULTRA_MAX_SECONDS`,
+`ULTRA_DIT_MODEL`, `ULTRA_SEED_MAX_SHORT` (480), `ULTRA_ENCODE_TILE`/`ULTRA_DECODE_TILE` (384),
+`SEEDVR2_VRAM_HEADROOM_MB` (300), `ULTRA_BLOCKSWAP` (32), `ULTRA_BATCH_FRAMES` (33), `ULTRA_CHUNK_FRAMES` (33),
+`ULTRA_ANCHOR_SIGMA` (3), `ULTRA_TEMPORAL` (4). Log penuh SeedVR2 disimpan dalam folder kerja job (`seedvr2.log`).
 Uji: `node agent/premium.js <input> <output> ultra`.
 
 **Saiz batch** (klip muka bercakap 576x1024, 33/97 frame):
@@ -192,9 +219,11 @@ Uji: `node agent/premium.js <input> <output> ultra`.
 |---|---|---|---|
 | 5 | 400 s / 33 frame | 1.27x | muka "melompat" setiap 5 frame |
 | 13 + overlap 3 | 734 s / 33 frame | 1.21x | |
-| **33** | **89 s / 33 frame** | 1.27x | decode VAE ada kos tetap ~45 s setiap batch, jadi batch besar lebih laju |
+| **33** | **89 s / 33 frame** | 1.27x | kurang sempadan batch |
 | 49 | decode 4.5 min/batch | | VRAM melimpah |
 | 97 | DiT 10 min | | VRAM melimpah |
+
+(Masa batch 5 dan 13 di atas diukur sebelum had VRAM; sebahagiannya ialah limpahan VRAM, bukan saiz batch.)
 
 **Penstabil** (selepas SeedVR2, ffmpeg): SeedVR2 lukis semula tekstur sedikit berbeza setiap frame, jadi
 tajam bila pause tapi "menggelegak"/berdenyut bila bergerak. Output = detail halus SeedVR2 (atas gblur
