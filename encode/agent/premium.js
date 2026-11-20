@@ -37,7 +37,12 @@ const CFG = {
   seedvr2Dir: process.env.SEEDVR2_DIR || 'D:/encode-work/seedvr2',
   ultraMaxSeconds: Number(process.env.ULTRA_MAX_SECONDS || 15),
   ultraDecodeTile: Number(process.env.ULTRA_DECODE_TILE || 384),
-  ultraChunk: Number(process.env.ULTRA_CHUNK_FRAMES || 150),
+  // one batch per chunk: larger chunks keep every batch's latents on the GPU and spill ~2GB into
+  // shared memory on a 6GB card (a 200-frame clip ran >30 min vs 2.6 s/frame with chunk = batch)
+  ultraChunk: Number(process.env.ULTRA_CHUNK_FRAMES || 33),
+  ultraBatch: Number(process.env.ULTRA_BATCH_FRAMES || 33), // 4n+1; see seedvr2()
+  ultraAnchorSigma: Number(process.env.ULTRA_ANCHOR_SIGMA ?? 3), // 0 = off (raw SeedVR2 output)
+  ultraTemporal: Number(process.env.ULTRA_TEMPORAL ?? 4), // hqdn3d temporal strength, 0 = off
 };
 const SEEDVR2 = {
   python: path.join(CFG.seedvr2Dir, 'venv', 'Scripts', 'python.exe'),
@@ -53,8 +58,9 @@ const SEEDVR2 = {
 const PROFILES = {
   max: { name: 'max', targetShort: 2160, fps: 120, aiMaxShort: 720 },
   balanced: { name: 'balanced', targetShort: 1440, fps: 60, aiMaxShort: 540 },
-  // SeedVR2 restores/regenerates detail at seedShort (480p: ~4 s/frame on the 2060, faces stay
-  // stable; 360p was faster but changed identities), then Real-ESRGAN x4 + lanczos to 4K.
+  // SeedVR2 restores/regenerates detail at seedShort (480-576p: ~2-3 s/frame on the 2060 with
+  // 33-frame batches; 360p was faster but changed identities), then a temporal stabiliser,
+  // Real-ESRGAN x4 + lanczos to 4K.
   ultra: { name: 'ultra', targetShort: 2160, fps: 60, aiMaxShort: 576, seedShort: 480, seedMaxShort: 576 },
 };
 
@@ -228,7 +234,7 @@ async function analyze(input, log, signal, maxSeconds = CFG.maxSeconds) {
     meanLuma: +yavg.toFixed(1), lowLight, motion: +mafd.toFixed(2), sceneCuts,
     borders: cropW && cropH ? { w: cropW, h: cropH, hasBorders: cropW < v.width * 0.98 || cropH < v.height * 0.98 } : null,
     noise,
-    audio: audio.map((s) => ({ index: s.index, codec: s.codec_name, channels: s.channels })),
+    audio: audio.map((s) => ({ index: s.index, codec: s.codec_name, channels: s.channels, duration: Number(s.duration) || 0 })),
     sizeBytes: fs.statSync(input).size,
   };
   log(`analisis: ${a.displayWidth}x${a.displayHeight} (DAR ${a.displayAspect}, rot ${rot}, SAR ${sar.toFixed(3)}) `
@@ -312,11 +318,14 @@ function seedvr2Ready() {
 function seedvr2({ input, outDir, seedShort, signal, onProgress }) {
   const args = [SEEDVR2.wrapper, SEEDVR2.repo, input, '--output', outDir, '--output_format', 'png',
     '--model_dir', SEEDVR2.models, '--dit_model', SEEDVR2.dit, '--resolution', String(seedShort),
-    '--batch_size', '5', '--blocks_to_swap', '32', '--swap_io_components',
+    // Each VAE decode batch costs ~45 s of fixed overhead on the 2060, whatever its length: 33-frame
+    // batches ran 2.3 s/frame vs 12 s/frame with 5, and have fewer batch-edge jumps. --uniform_batch_size
+    // pads the last batch so it is not a tiny, inconsistent one.
+    '--batch_size', String(CFG.ultraBatch), '--uniform_batch_size', '--blocks_to_swap', '32', '--swap_io_components',
     '--dit_offload_device', 'cpu', '--vae_offload_device', 'cpu',
     '--vae_encode_tiled', '--vae_encode_tile_size', '512', '--vae_encode_tile_overlap', '32',
     '--vae_decode_tiled', '--vae_decode_tile_size', String(CFG.ultraDecodeTile), '--vae_decode_tile_overlap', '32',
-    '--chunk_size', String(CFG.ultraChunk), '--color_correction', 'lab', '--debug'];
+    '--chunk_size', String(CFG.ultraChunk), '--color_correction', 'lab'];
   return new Promise((resolve, reject) => {
     const p = spawn(SEEDVR2.python, args, {
       cwd: SEEDVR2.repo, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
@@ -331,8 +340,12 @@ function seedvr2({ input, outDir, seedShort, signal, onProgress }) {
     const t0 = Date.now();
     let out = '', chunk = 1, chunks = 1, phase = 0, done = 0;
     const PHASES = { Encoding: [0, 0.1], Upscaling: [0.1, 0.3], Decoding: [0.4, 0.6] }; // share of a chunk
+    // full SeedVR2 output (with its own per-phase timestamps) next to the job, for speed diagnosis
+    const logFile = fs.createWriteStream(path.join(path.dirname(outDir), 'seedvr2.log'));
+    p.on('close', () => logFile.end());
     const onData = (d) => {
       const s = String(d);
+      logFile.write(s);
       out = (out + s).slice(-200_000);
       for (const m of s.matchAll(/Chunk (\d+)\/(\d+)|(Encoding|Upscaling|Decoding) batch (\d+)\/(\d+)/g)) {
         if (m[1]) { chunk = Number(m[1]); chunks = Number(m[2]); continue; }
@@ -410,7 +423,9 @@ async function colorMeans(file, duration, toBt709, signal) {
   const n = 6;
   const sel = Array.from({ length: n }, (_, i) => `between(t\\,${((duration * (i + 0.5)) / n).toFixed(2)}\\,${((duration * (i + 0.5)) / n + 0.05).toFixed(2)})`).join('+'); // 50ms window: >= 1 frame at 24fps
   const r = await run(CFG.ffmpeg, ['-hide_banner', '-i', file, '-an', '-vf',
-    `select='${sel}',scale=480:-2${toBt709 ? ':out_color_matrix=bt709' : ''},format=yuv420p,signalstats,metadata=print`, '-f', 'null', '-'], { signal });
+    // out_range=tv: iPhone clips are often full range (yuvj420p); comparing raw full-range values
+    // with the limited-range output reads as a ~2.4 luma shift that is not really there
+    `select='${sel}',scale=480:-2${toBt709 ? ':out_color_matrix=bt709:out_range=tv' : ''},format=yuv420p,signalstats,metadata=print`, '-f', 'null', '-'], { signal });
   const avg = (k) => {
     const v = [...r.err.matchAll(new RegExp(`signalstats\\.${k}=([\\d.]+)`, 'g'))].map((m) => Number(m[1]));
     return v.length ? v.reduce((x, y) => x + y, 0) / v.length : NaN;
@@ -446,7 +461,12 @@ async function validate(out, a, p, signal, input) {
     duration: Math.abs(dur - a.duration) < 0.15,
     frames: Math.abs(frames - Math.round(a.duration * p.outFpsValue)) <= 2,
     audioTracks: audio.length === a.audio.length,
-    audioSync: audio.every((s) => !s.duration || Math.abs(Number(s.duration) - a.duration) < 0.15),
+    // compare with the source track itself: phone clips often carry audio a little shorter than video
+    audioSync: audio.every((s, i) => {
+      const src = a.audio[i] && a.audio[i].duration;
+      const want = src ? Math.min(src, a.duration) : a.duration;
+      return !s.duration || Math.abs(Number(s.duration) - want) < 0.15;
+    }),
     decodesCleanly: dec.code === 0 && !dec.err.trim(),
     noNewBorders: !(outBorders && !(a.borders && a.borders.hasBorders)),
     tenBit: /10le$|p010/.test(v.pix_fmt || ''),
@@ -537,7 +557,7 @@ async function enhance({ input, output, jobId, log = console.log, onProgress = (
 
     let cur = prep;
 
-    // ---- Ultra: SeedVR2 restoration (regenerates detail; temporal batches of 5 frames)
+    // ---- Ultra: SeedVR2 restoration (regenerates detail in temporal batches) + stabiliser
     if (p.seed) {
       const seedMp4 = path.join(dir, 'seed.mp4');
       const info = await stage('seed', seedMp4, async () => {
@@ -549,8 +569,22 @@ async function enhance({ input, output, jobId, log = console.log, onProgress = (
         if (n < p.frames) throw new Error(`SeedVR2 keluarkan ${n} frame, jangka >= ${p.frames}`);
         // SeedVR2 reads frames with OpenCV, which converts YUV->RGB with the BT.601 matrix. Going
         // back with the same matrix restores the original YUV values (then tagged BT.709 as before).
+        const toYuv = `scale=${p.seed.w}:${p.seed.h}:flags=lanczos:out_color_matrix=bt601:out_range=tv,setsar=1`;
+        // Temporal stabiliser. SeedVR2 redraws texture and small shapes slightly differently from
+        // frame to frame (and jumps at batch edges): sharp when paused, "boiling" in motion.
+        // Keep only its fine detail and take everything coarser (tone, colour, shapes) from the
+        // source frame itself, then calm the remaining frame-to-frame texture noise with a light
+        // temporal-only hqdn3d. On a talking-face test: frame-to-frame change 1.27x -> 1.00x of the
+        // source (i.e. no added flicker), still visibly sharper than the source.
+        const sigma = CFG.ultraAnchorSigma * Math.max(1, p.seed.short / Math.min(p.aiW, p.aiH));
+        const graph = sigma > 0
+          ? `[0]${toYuv},format=yuv444p16le,split[s][s2];[s2]gblur=sigma=${sigma.toFixed(1)}[sl];` +
+            `[1]scale=${p.seed.w}:${p.seed.h}:flags=lanczos,setsar=1,format=yuv444p16le,gblur=sigma=${sigma.toFixed(1)}[pl];` +
+            `[s][sl]blend=all_expr='A-B+32768':shortest=1[h];[h][pl]blend=all_expr='A+B-32768':shortest=1` +
+            `${CFG.ultraTemporal > 0 ? `,hqdn3d=0:0:${CFG.ultraTemporal}:${CFG.ultraTemporal}` : ''},format=yuv420p[o]`
+          : `[0]${toYuv},format=yuv420p[o]`;
         await ffmpeg(['-y', '-framerate', `${a.fps.num}/${a.fps.den}`, '-i', path.join(pngDir, 'prep_%06d.png'),
-          '-vf', `scale=${p.seed.w}:${p.seed.h}:flags=lanczos:out_color_matrix=bt601:out_range=tv,setsar=1,format=yuv420p`,
+          '-i', prep, '-filter_complex', graph, '-map', '[o]',
           '-c:v', 'libx264', '-qp', '0', '-preset', 'ultrafast', '-colorspace', 'bt709', '-color_primaries', 'bt709',
           '-color_trc', 'bt709', seedMp4], { signal });
         fs.rmSync(framesDir, { recursive: true, force: true });
@@ -634,10 +668,14 @@ async function enhance({ input, output, jobId, log = console.log, onProgress = (
       }
     } else {
       for (let q = ladder.start - ladder.step; q >= ladder.min; q -= ladder.step) {
+        const prev = t;
         t = await tryQ(q);
         if (t.vmaf >= CFG.vmafMin) { best = t; break; }
+        // NVENC clamps HEVC Main tier to the level's bitrate cap (L5.1: ~40 Mbps at 4K60): once the
+        // file stops growing, lower q values only re-encode the same bytes
+        if (t.bytes < prev.bytes * 1.01) { log(`had bitrate encoder dicapai (${mb(t.bytes)}), berhenti di q${q}`); break; }
       }
-      if (!best) best = tries[tries.length - 1];
+      if (!best) best = tries.reduce((x, y) => (y.vmaf > x.vmaf ? y : x));
     }
     for (const c of tries) if (c !== best) fs.rmSync(c.file, { force: true });
     fs.copyFileSync(best.file, output);

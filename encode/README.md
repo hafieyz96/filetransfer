@@ -148,7 +148,8 @@ analisis -> prep (kecilkan sahaja) -> SeedVR2 3B 480p -> RIFE 60fps -> Real-ESRG
 ```
 
 Premium cuma tajamkan detail yang ada. Ultra guna **SeedVR2** (ByteDance, diffusion satu langkah, Apache-2.0)
-yang **cipta semula** detail yang hilang (muka, rambut, kain), diproses 5 frame sekali supaya tak berkelip.
+yang **cipta semula** detail yang hilang (muka, rambut, kain), diproses 33 frame sekali, kemudian distabilkan
+(lihat "Penstabil" di bawah) supaya tak berdenyut bila ada pergerakan.
 Ditawarkan di page sebagai pilihan ketiga; maks `ULTRA_MAX_SECONDS` (15) saat.
 
 **Diukur pada RTX 2060 6GB** (3B fp16, BlockSwap 32, VAE tiled):
@@ -158,7 +159,7 @@ Ditawarkan di page sebagai pilihan ketiga; maks `ULTRA_MAX_SECONDS` (15) saat.
 | bfloat16 (default kod SeedVR2) | OOM selepas 17 min untuk 30 frame. Turing cuma emulasi bf16 |
 | fp16, output 576p | 7.7 s/frame, wajah setia |
 | fp16, output 480p, jubin decode 512 | 4.1 s/frame; kadang-kadang 3-5x lebih lambat (VRAM melimpah ke RAM) |
-| fp16, output 480p, jubin decode 384 | **2.3-3.1 s/frame**, tiada limpahan (default) |
+| fp16, output 480p, jubin decode 384, batch 5 | 2.3-3.1 s/frame, tiada limpahan |
 | fp16, output 360p + ESRGAN | 1.85 s/frame tapi **wajah bertukar jadi orang lain** (ditolak) |
 | E2E 3gp 256x144 2s -> 3840x2160@60 | 3.1 min, VRAM puncak 5.6GB, 12/12 semakan lulus, VMAF 97.0 |
 | E2E WhatsApp 360x640 kabur 3s -> 2160x3840@60 | 5.5 min, 5.7GB, 12/12 lulus, VMAF 97.5 |
@@ -180,7 +181,26 @@ D:\encode-work\seedvr2\venv\Scripts\pip install torch torchvision --index-url ht
 
 Kod upstream **tidak diubah**. `agent/tools/seedvr2_run.py` paksa fp16 pada GPU tanpa bf16 asli (compute < 8.0)
 sebelum pipeline SeedVR2 diimport. Tetapan: `SEEDVR2_DIR`, `ULTRA_MAX_SECONDS`, `ULTRA_DECODE_TILE` (384),
-`ULTRA_CHUNK_FRAMES` (150, had RAM). Uji: `node agent/premium.js <input> <output> ultra`.
+`ULTRA_BATCH_FRAMES` (33), `ULTRA_CHUNK_FRAMES` (33), `ULTRA_ANCHOR_SIGMA` (3), `ULTRA_TEMPORAL` (4).
+Chunk mesti sama dengan batch: chunk 150 simpan semua latent dalam VRAM dan melimpah ~2GB ke RAM kongsi
+(klip 200 frame >30 min); chunk 33 = 97 frame dalam 254 s (2.6 s/frame), tiada limpahan.
+Uji: `node agent/premium.js <input> <output> ultra`.
+
+**Saiz batch** (klip muka bercakap 576x1024, 33/97 frame):
+
+| batch | masa | perubahan antara frame vs sumber | nota |
+|---|---|---|---|
+| 5 | 400 s / 33 frame | 1.27x | muka "melompat" setiap 5 frame |
+| 13 + overlap 3 | 734 s / 33 frame | 1.21x | |
+| **33** | **89 s / 33 frame** | 1.27x | decode VAE ada kos tetap ~45 s setiap batch, jadi batch besar lebih laju |
+| 49 | decode 4.5 min/batch | | VRAM melimpah |
+| 97 | DiT 10 min | | VRAM melimpah |
+
+**Penstabil** (selepas SeedVR2, ffmpeg): SeedVR2 lukis semula tekstur sedikit berbeza setiap frame, jadi
+tajam bila pause tapi "menggelegak"/berdenyut bila bergerak. Output = detail halus SeedVR2 (atas gblur
+sigma 3, diskala ikut nisbah besar) + tona/warna/bentuk dari frame asal yang sama, kemudian `hqdn3d` temporal
+sahaja. Ukuran: perubahan antara frame 1.27x -> **1.00x** sumber (tiada kelipan tambahan), beza dari sumber
+0.98 -> 0.26, masih lebih tajam dari sumber (blurdetect 10.8 -> 9.2).
 
 ## Keselamatan dan had
 
