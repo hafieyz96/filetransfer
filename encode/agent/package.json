@@ -1,0 +1,14 @@
+{
+  "name": "encode-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "PC side: polls the droplet for jobs, encodes with ffmpeg (NVENC), uploads the result.",
+  "main": "agent.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env agent.js",
+    "check": "node --env-file-if-exists=.env agent.js --check"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

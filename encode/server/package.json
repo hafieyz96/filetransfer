@@ -1,0 +1,17 @@
+{
+  "name": "encode-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Droplet side: upload page, job queue, download. PC agent pulls jobs from here.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1"
+  }
+}

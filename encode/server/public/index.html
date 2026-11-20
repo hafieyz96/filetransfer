@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ms">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video HD Enhancer</title>
+<style>
+  :root { --bg:#fff; --fg:#1a1a1a; --muted:#666; --line:#d8d8d8; --accent:#0b7a4b; --gold:#9a6b00; --err:#b3261e; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#141414; --fg:#eee; --muted:#9a9a9a; --line:#333; --accent:#3ddc97; --gold:#f2c14e; --err:#ff8a80; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; }
+  main { max-width:480px; margin:0 auto; padding:24px 16px; }
+  h1 { font-size:1.3rem; margin:0 0 4px; }
+  p.sub { color:var(--muted); margin:0 0 20px; }
+  label { display:block; margin:14px 0 6px; font-weight:600; }
+  input[type=file], input[type=password] { width:100%; box-sizing:border-box; padding:10px; border:1px solid var(--line); border-radius:8px; background:transparent; color:inherit; }
+  button, a.btn { display:block; box-sizing:border-box; text-align:center; text-decoration:none; width:100%; padding:12px; font-size:1rem; border:0; border-radius:8px; background:var(--accent); color:#fff; cursor:pointer; }
+  #go { margin-top:18px; }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { margin-top:18px; min-height:1.5em; }
+  .err { color:var(--err); }
+  progress { width:100%; margin-top:10px; }
+  .card { margin-top:16px; padding:14px; border:1px solid var(--line); border-radius:12px; }
+  .card h2 { font-size:1.05rem; margin:0; }
+  .card.premium { border-color:var(--gold); }
+  .card.premium h2 { color:var(--gold); }
+  .card p { margin:2px 0 10px; color:var(--muted); font-size:.9rem; }
+  .card .state { margin:8px 0 0; font-size:.95rem; }
+  .card .row { display:grid; gap:8px; margin-top:8px; }
+  .card.premium button, .card.premium a.btn { background:var(--gold); }
+  .card button.alt, .card a.btn.alt { background:transparent; color:inherit; border:1px solid var(--line); }
+  video { width:100%; margin-top:10px; border-radius:8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Video HD Enhancer</h1>
+  <p class="sub">Upload video, PC akan encode, kemudian muat turun hasilnya.</p>
+  <form id="f">
+    <label for="video">Video</label>
+    <input id="video" type="file" accept="video/*" required>
+    <label for="pw">Password</label>
+    <input id="pw" type="password" autocomplete="off">
+    <button id="go" type="submit">Upload &amp; enhance</button>
+  </form>
+  <progress id="bar" max="100" value="0" hidden></progress>
+  <div id="status" role="status" aria-live="polite"></div>
+
+  <div id="cards" hidden>
+    <section class="card" id="c-standard">
+      <h2>Standard</h2>
+      <p>Lebih jelas dan bersih, saiz fail kecil.</p>
+      <div class="state" id="s-standard"></div>
+      <div class="row" id="r-standard"></div>
+    </section>
+    <section class="card premium" id="c-premium">
+      <h2>Premium</h2>
+      <p>AI upscale (Real-ESRGAN) ke 1440p, gerakan licin AI 60fps (RIFE), HEVC 10-bit. Diproses di GPU, video 30s ambil ~15 minit.</p>
+      <div class="state" id="s-premium"></div>
+      <div class="row" id="r-premium"></div>
+    </section>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const setStatus = (t, err) => { $('status').textContent = t; $('status').className = err ? 'err' : ''; };
+const VARIANTS = ['standard', 'premium'];
+try { $('pw').value = localStorage.getItem('pw') || ''; } catch {}
+
+$('f').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const file = $('video').files[0];
+  if (!file) return;
+  try { localStorage.setItem('pw', $('pw').value); } catch {}
+  $('go').disabled = true; $('cards').hidden = true; $('bar').hidden = false; $('bar').value = 0;
+  setStatus('Memuat naik...');
+
+  const fd = new FormData(); fd.append('video', file);
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/upload');
+  xhr.setRequestHeader('x-upload-password', $('pw').value);
+  xhr.upload.onprogress = (ev) => { if (ev.lengthComputable) $('bar').value = ev.loaded / ev.total * 100; };
+  xhr.onerror = () => fail('Sambungan gagal');
+  xhr.onload = () => {
+    let body = {}; try { body = JSON.parse(xhr.responseText); } catch {}
+    if (xhr.status !== 201) return fail(body.error || ('Ralat ' + xhr.status));
+    $('bar').hidden = true;
+    setStatus('');
+    resetCards();
+    poll(body.id);
+  };
+  xhr.send(fd);
+});
+
+function fail(msg) { $('go').disabled = false; $('bar').hidden = true; setStatus(msg, true); }
+
+function resetCards() {
+  $('cards').hidden = false;
+  for (const v of VARIANTS) { $('s-' + v).textContent = 'Dalam queue, menunggu PC...'; $('r-' + v).innerHTML = ''; $('s-' + v).className = 'state'; }
+  rendered.clear();
+}
+
+const rendered = new Set();
+async function poll(id) {
+  for (;;) {
+    let j;
+    try { j = await (await fetch('/jobs/' + id)).json(); } catch { await sleep(3000); continue; }
+    if (!j.variants) { $('cards').hidden = true; return fail('Job hilang (mungkin dah tamat tempoh)'); }
+
+    let pending = 0;
+    VARIANTS.forEach((v, i) => {
+      const x = j.variants[v];
+      if (x.state === 'done') { if (!rendered.has(v)) { rendered.add(v); showDone(v, x.url); } }
+      else if (x.state === 'failed') { $('s-' + v).textContent = 'Gagal: ' + x.error; $('s-' + v).className = 'state err'; }
+      else {
+        pending++;
+        // the variant currently being worked on is the first pending one while the job is processing
+        const firstPending = VARIANTS.findIndex((n) => j.variants[n].state === 'pending') === i;
+        $('s-' + v).textContent = j.status === 'processing' && firstPending ? (x.progress ? 'Sedang diproses: ' + x.progress : 'Sedang di-encode...')
+          : j.status === 'processing' ? 'Menunggu giliran...' : 'Dalam queue, menunggu PC...';
+      }
+    });
+    if (!pending) { $('go').disabled = false; return; }
+    await sleep(2000);
+  }
+}
+
+function showDone(v, url) {
+  $('s-' + v).textContent = 'Siap.';
+  const row = $('r-' + v);
+  row.innerHTML = '';
+  const dl = document.createElement('a');
+  dl.className = 'btn'; dl.href = url; dl.textContent = 'Muat turun ' + (v === 'premium' ? 'Premium' : 'Standard');
+  row.append(dl);
+  const vid = document.createElement('video');
+  vid.controls = true; vid.playsInline = true; vid.preload = 'metadata'; vid.src = url;
+  row.append(vid);
+  offerSave(v, url, row);
+}
+
+// Phones can't write to the gallery from a web page. The share sheet can ("Save Video" on iOS,
+// Gallery/Photos on Android). The file is fetched in advance so the tap can call share() at once
+// (iOS drops the "user gesture" if we await a download first).
+async function offerSave(v, url, row) {
+  if (!navigator.canShare || !navigator.share) return;
+  try {
+    const blob = await (await fetch(url)).blob();
+    const file = new File([blob], `video-${v}.mp4`, { type: 'video/mp4' });
+    if (!navigator.canShare({ files: [file] })) return;
+    const b = document.createElement('button');
+    b.className = 'alt'; b.textContent = 'Simpan ke Galeri';
+    b.onclick = () => navigator.share({ files: [file] }).catch(() => {});
+    row.insertBefore(b, row.children[1]);
+  } catch { /* the plain download link still works */ }
+}
+</script>
+</body>
+</html>

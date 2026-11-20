@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="ms">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#5b21b6">
+<title>Kamera Session</title>
+<style>
+  :root { --glass: rgba(255,255,255,.14); --edge: rgba(255,255,255,.3); --text: #fff; --muted: rgba(255,255,255,.72); }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--text);
+    background: linear-gradient(135deg, #312e81, #7e22ce 50%, #db2777) fixed; min-height: 100vh;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom)); overflow-x: hidden;
+  }
+  .blob { position: fixed; border-radius: 50%; filter: blur(70px); opacity: .55; z-index: 0; animation: float 14s ease-in-out infinite alternate; }
+  .b1 { width: 340px; height: 340px; background: #22d3ee; top: -90px; left: -80px; }
+  .b2 { width: 300px; height: 300px; background: #f59e0b; bottom: -80px; right: -60px; animation-delay: -5s; }
+  .b3 { width: 240px; height: 240px; background: #a3e635; top: 45%; left: 55%; opacity: .3; animation-delay: -9s; }
+  @keyframes float { to { transform: translate(40px, 50px) scale(1.15); } }
+  main { position: relative; z-index: 1; max-width: 760px; margin: 0 auto; }
+  section { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+  .glass {
+    background: var(--glass); border: 1px solid var(--edge); border-radius: 26px; padding: 20px;
+    backdrop-filter: blur(22px) saturate(170%); -webkit-backdrop-filter: blur(22px) saturate(170%);
+    box-shadow: 0 10px 40px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.35);
+  }
+  h1 { margin: 0 0 4px; font-size: 1.5rem; letter-spacing: -.02em; }
+  p { margin: 0; color: var(--muted); line-height: 1.5; font-size: .95rem; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .row > * { flex: 1 1 auto; }
+  button, .btn {
+    font: inherit; font-weight: 600; color: var(--text); text-decoration: none; text-align: center; cursor: pointer;
+    background: rgba(255,255,255,.16); border: 1px solid var(--edge); border-radius: 16px; padding: 13px 18px;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); transition: transform .12s, background .2s; display: inline-block;
+  }
+  button:hover, .btn:hover { background: rgba(255,255,255,.26); }
+  button:active, .btn:active { transform: scale(.97); }
+  button:disabled { opacity: .5; cursor: default; }
+  .primary { background: linear-gradient(135deg, rgba(255,255,255,.95), rgba(255,255,255,.75)); color: #4c1d95; border-color: transparent; }
+  .primary:hover { background: #fff; }
+  .danger { background: rgba(244,63,94,.35); }
+  .hidden { display: none !important; }
+  input { font: inherit; width: 100%; padding: 13px 16px; border-radius: 16px; border: 1px solid var(--edge); background: rgba(255,255,255,.14); color: #fff; outline: none; }
+  input::placeholder { color: var(--muted); }
+  input:focus { border-color: #fff; }
+  .cam { position: relative; border-radius: 20px; overflow: hidden; background: #000; border: 1px solid var(--edge); }
+  /* nisbah 4:3 (atau 3:4 bila fon menegak); --ar = lebar/tinggi, ditetapkan oleh JS */
+  .cam video { display: block; margin: 0 auto; object-fit: cover; background: #000; aspect-ratio: var(--ar, 1.3333);
+    width: min(100%, calc(82vh * var(--ar, 1.3333))); width: min(100%, calc(82dvh * var(--ar, 1.3333))); }
+  /* kamera terbuka: tiada kad, penuh sampai hujung skrin kiri dan kanan */
+  #camCard.camopen { width: 100vw; position: relative; left: 50%; transform: translateX(-50%); padding: 0; border: 0; border-radius: 0;
+    background: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  #camCard.camopen .cam { border: 0; border-radius: 0; }
+  #camCard.camopen #camMsg, #camCard.camopen #upState { margin: 10px 16px 0; }
+  .camx { position: absolute; top: 12px; right: 12px; background: rgba(0,0,0,.4); }
+  .flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
+  .flash.on { animation: flash .35s ease-out; }
+  @keyframes flash { 0% { opacity: .85; } 100% { opacity: 0; } }
+  .controls { position: absolute; left: 0; right: 0; bottom: 16px; display: flex; justify-content: center; align-items: center; gap: 26px; }
+  .controls button, .controls span { flex: 0 0 auto; }
+  .controls .small { background: rgba(0,0,0,.4); }
+  .snap { width: 74px; height: 74px; padding: 0; border-radius: 50%; border: 4px solid #fff; background: rgba(255,255,255,.9);
+    box-shadow: 0 0 0 4px rgba(255,255,255,.25), 0 6px 20px rgba(0,0,0,.3); }
+  .snap:hover { background: #fff; }
+  .small { width: 54px; height: 54px; padding: 0; border-radius: 50%; font-size: 1.3rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .tile { position: relative; background: rgba(255,255,255,.1); border: 1px solid var(--edge); border-radius: 18px; overflow: hidden; display: grid; }
+  .tile.sel { outline: 3px solid #a3e635; outline-offset: -3px; }
+  .tile img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; cursor: pointer; }
+  .tile input.chk { position: absolute; top: 8px; left: 8px; width: 28px; height: 28px; padding: 0; margin: 0; border-radius: 9px; cursor: pointer;
+    -webkit-appearance: none; appearance: none; border: 2px solid #fff; background: rgba(0,0,0,.35); backdrop-filter: blur(4px); }
+  .tile input.chk:checked { background: #a3e635; border-color: #a3e635; }
+  .tile input.chk:checked::after { content: "✓"; display: block; text-align: center; line-height: 24px; color: #1a2e05; font-weight: 800; }
+  .bulk { position: sticky; bottom: 12px; z-index: 5; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: space-between; padding: 14px 18px; }
+  .bulk .row { flex: 1 1 auto; justify-content: flex-end; }
+  .bulk button { padding: 10px 16px; }
+  .trash { padding: 10px 12px; flex: 0 0 auto; }
+  .mini { padding: 8px 16px; font-size: .85rem; border-radius: 13px; }
+  .botnav { justify-content: center; }
+  .botnav > * { flex: 0 0 auto; }
+  .lb { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center;
+    background: rgba(15,8,40,.78); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+  .lb img { max-width: 92vw; max-height: 86vh; object-fit: contain; border-radius: 18px; border: 1px solid var(--edge); box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+  .lbx, .lbn { position: absolute; width: 48px; height: 48px; padding: 0; border-radius: 50%; font-size: 1.3rem; }
+  .lbx { top: max(16px, env(safe-area-inset-top)); right: 16px; }
+  .lbn { top: 50%; transform: translateY(-50%); font-size: 1.8rem; line-height: 1; }
+  .lbn.prev { left: 12px; } .lbn.next { right: 12px; }
+  .tile .btn { border-radius: 0; border-width: 1px 0 0; padding: 10px; font-size: .9rem; }
+  .link { word-break: break-all; font-size: .8rem; background: rgba(0,0,0,.2); border-radius: 12px; padding: 8px 12px; margin: 10px 0; user-select: all; }
+  .msg { padding: 12px 14px; border-radius: 14px; background: rgba(245,158,11,.28); border: 1px solid rgba(253,224,71,.5); font-size: .9rem; line-height: 1.45; }
+  .storage { font-size: .85rem; color: var(--muted); margin-top: 12px; }
+  .storage .bar { height: 8px; border-radius: 99px; background: rgba(255,255,255,.18); overflow: hidden; margin-top: 6px; }
+  .storage .bar i { display: block; height: 100%; min-width: 3px; background: linear-gradient(90deg, #22d3ee, #a3e635); border-radius: 99px; }
+  .center { text-align: center; }
+  .sess { display: flex; justify-content: space-between; align-items: center; gap: 12px; color: inherit; text-decoration: none;
+    background: rgba(255,255,255,.1); border: 1px solid var(--edge); border-radius: 18px; padding: 12px 16px; transition: background .2s; }
+  .sess:hover { background: rgba(255,255,255,.2); }
+  .sess small { color: var(--muted); }
+  .sess span { font-size: 1.6rem; opacity: .7; }
+  .badge { display: inline-block; font-size: .75rem; padding: 2px 9px; border-radius: 99px; background: rgba(163,230,53,.3); margin-left: 6px; }
+  .badge.live { background: rgba(34,211,238,.3); }
+</style>
+</head>
+<body>
+<div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
+<main>
+
+  <!-- Log masuk -->
+  <section id="login" class="hidden">
+    <form class="glass center" id="loginForm" style="display:grid;gap:12px">
+      <h1>🔒 Kamera Session</h1>
+      <p>Masukkan kod akses.</p>
+      <input id="pin" type="password" placeholder="Kod akses" autocomplete="current-password" required>
+      <button class="primary" type="submit">Masuk</button>
+      <p id="loginErr" style="color:#fecaca"></p>
+    </form>
+  </section>
+
+  <!-- Senarai semua session -->
+  <section id="list" class="hidden">
+    <div class="glass center">
+      <h1>📷 Kamera Session</h1>
+      <button class="primary" id="startBtn" style="width:100%;margin-top:14px">Mula Session Baru</button>
+      <div class="storage" id="storage"></div>
+    </div>
+    <div class="glass">
+      <h1 style="font-size:1.15rem;margin-bottom:12px">Session</h1>
+      <div id="sessions" style="display:grid;gap:10px"></div>
+    </div>
+  </section>
+
+  <!-- Satu session: kamera + gambar -->
+  <section id="session" class="hidden">
+    <div class="glass">
+      <h1>📷 Session</h1>
+      <p id="startedAt"></p>
+      <div class="storage" id="storage2" style="margin-top:10px"></div>
+      <div class="row" style="margin-top:14px">
+        <a class="btn" href="/filetransfer">← Senarai</a>
+        <button id="doneBtn">✔ Siap</button>
+        <button class="danger" id="delSessBtn">🗑 Padam session</button>
+      </div>
+    </div>
+
+    <div class="glass" id="camCard">
+      <div id="camMsg" class="msg hidden" style="margin-bottom:12px"></div>
+      <button class="primary" id="openCam" style="width:100%">📷 Buka Kamera</button>
+      <div id="camWrap" class="hidden">
+        <div class="cam">
+          <video id="video" playsinline muted autoplay></video>
+          <div class="flash" id="flash"></div>
+          <button class="small camx" id="closeCam" title="Tutup kamera">✕</button>
+          <div class="controls">
+            <button class="small" id="flipBtn" title="Tukar kamera">🔄</button>
+            <button class="snap" id="snapBtn" aria-label="Ambil gambar"></button>
+            <span class="small" style="visibility:hidden"></span>
+          </div>
+        </div>
+      </div>
+      <p id="upState" class="center" style="margin-top:12px;font-size:.9rem">Gambar terus diupload bila snap.</p>
+    </div>
+
+    <div class="glass">
+      <div class="row" style="margin-bottom:14px">
+        <b>Gambar (<span id="count">0</span>)</b>
+        <button id="selAll" class="hidden">Pilih semua</button>
+        <a class="btn primary hidden" id="zipBtn">⬇ Muat turun semua (ZIP)</a>
+      </div>
+      <p style="margin-bottom:12px;font-size:.85rem">Gambar dipadam automatik selepas dimuat turun.</p>
+      <div class="grid" id="grid"></div>
+    </div>
+
+    <div class="row botnav">
+      <a class="btn mini" href="/filetransfer">← Senarai</a>
+      <button class="mini" id="doneBtn2">✔ Siap</button>
+    </div>
+
+    <div class="glass bulk hidden" id="bulk">
+      <b id="selCount"></b>
+      <div class="row">
+        <button class="primary" id="dlSel">⬇ Muat turun</button>
+        <button class="danger" id="delSel">🗑 Padam</button>
+        <button id="clearSel">Batal</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tamat -->
+  <section id="ended" class="hidden">
+    <div class="glass center">
+      <h1>✅ Selesai</h1>
+      <p style="margin:6px 0 18px">Session ini dah tamat dan gambar dah dipadam.</p>
+      <a class="btn primary" href="/filetransfer" style="width:100%">Ke senarai session</a>
+    </div>
+  </section>
+
+</main>
+<div id="lb" class="lb hidden">
+  <button class="lbx" id="lbClose" aria-label="Tutup">✕</button>
+  <button class="lbn prev" id="lbPrev" aria-label="Sebelum">‹</button>
+  <img id="lbImg" alt="">
+  <button class="lbn next" id="lbNext" aria-label="Seterusnya">›</button>
+</div>
+<script>
+const $ = (s) => document.querySelector(s);
+const API = '/filetransfer/api';
+const sid = (location.pathname.match(/\/filetransfer\/s\/([a-f0-9]{32})/) || [])[1];
+const photoUrl = (n, dl) => `${API}/sessions/${sid}/photos/${n}${dl ? '?download=1' : ''}`;
+let stream = null, facing = 'environment', busy = false, poll = null, sig = null;
+
+const fmt = (b) => b <= 0 ? '0 KB' : b >= 1073741824 ? (b / 1073741824).toFixed(2) + ' GB' : b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
+const fmtDate = (t) => new Date(t).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+  .replace(/\b(am|pm)\b/, (m) => m.toUpperCase());
+function show(name) { for (const s of ['login', 'list', 'session', 'ended']) $('#' + s).classList.toggle('hidden', s !== name); }
+
+async function api(path, opts) {
+  const r = await fetch(API + path, { cache: 'no-store', ...opts });
+  if (r.status === 401) { clearInterval(poll); stopCam(); show('login'); throw new Error('auth'); }
+  return r;
+}
+function renderStorage(el, st) {
+  // guna / jumlah ruang untuk gambar (gambar sedia ada + ruang disk kosong)
+  const total = st.app + st.diskFree;
+  const pct = Math.min(100, (st.app / total) * 100);
+  el.innerHTML = `💾 <b>${fmt(st.app)} / ${fmt(total)}</b><div class="bar"><i style="width:${pct}%"></i></div>`;
+}
+
+// ---------- Log masuk ----------
+$('#loginForm').onsubmit = async (e) => {
+  e.preventDefault();
+  $('#loginErr').textContent = '';
+  const r = await fetch(API + '/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: $('#pin').value }) });
+  if (r.ok) location.reload();
+  else $('#loginErr').textContent = r.status === 429 ? 'Terlalu banyak cubaan, tunggu sebentar.' : r.status === 503 ? 'Server belum disetup.' : 'Kod salah.';
+};
+
+// ---------- Senarai ----------
+async function loadList() {
+  const j = await (await api('/sessions')).json();
+  renderStorage($('#storage'), j.storage);
+  const box = $('#sessions');
+  if (!j.sessions.length) { box.innerHTML = '<p>Belum ada session. Tekan "Mula Session Baru".</p>'; return; }
+  box.replaceChildren(...j.sessions.map((s) => {
+    const d = document.createElement('div');
+    d.className = 'sess';
+    d.innerHTML = `<a href="/filetransfer/s/${s.id}" style="flex:1;color:inherit;text-decoration:none"><b>${fmtDate(s.created)}</b><span class="badge ${s.done ? '' : 'live'}">${s.done ? 'Siap' : 'Sedang berjalan'}</span><br><small>${s.count} gambar · ${fmt(s.size)}</small></a><button class="trash danger" title="Padam session">🗑</button>`;
+    d.querySelector('.trash').onclick = async () => { if (await delSession(s.id, s.count)) loadList(); };
+    return d;
+  }));
+}
+async function delSession(sessionId, count) {
+  if (!confirm(`Padam session ini${count ? ` dan ${count} gambar` : ''}? Tak boleh diundur.`)) return false;
+  const r = await api(`/sessions/${sessionId}`, { method: 'DELETE' });
+  if (!r.ok) { alert('Gagal padam'); return false; }
+  return true;
+}
+$('#startBtn').onclick = async () => {
+  $('#startBtn').disabled = true;
+  try {
+    const r = await api('/sessions', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error);
+    location.href = `/filetransfer/s/${j.id}`;
+  } catch (e) { if (e.message !== 'auth') alert(e.message || 'Gagal mula session'); $('#startBtn').disabled = false; }
+};
+
+// ---------- Session ----------
+async function loadSession(first) {
+  const r = await api(`/sessions/${sid}`);
+  if (r.status === 404) { clearInterval(poll); stopCam(); return show('ended'); }
+  const s = await r.json();
+  $('#startedAt').textContent = `Dimulakan: ${fmtDate(s.created)} · ${s.done ? 'Siap' : 'Sedang berjalan'}`;
+  renderStorage($('#storage2'), s.storage);
+  $('#count').textContent = s.photos.length;
+  $('#zipBtn').href = `${API}/sessions/${sid}/zip`;
+  $('#zipBtn').classList.toggle('hidden', !s.photos.length);
+  const names = s.photos.map((p) => p.name);
+  photoNames = names;
+  if (lbName && !names.includes(lbName)) closeLb();
+  for (const n of [...selected]) if (!names.includes(n)) selected.delete(n);
+  $('#selAll').classList.toggle('hidden', !names.length);
+  const now = names.join();
+  if (first || now !== sig) {
+    sig = now;
+    $('#grid').replaceChildren(...(s.photos.length ? s.photos.map((p) => {
+      const t = document.createElement('div'); t.className = 'tile'; t.dataset.name = p.name;
+      const chk = Object.assign(document.createElement('input'), { type: 'checkbox', className: 'chk', checked: selected.has(p.name) });
+      const img = Object.assign(new Image(), { src: photoUrl(p.name), alt: '', loading: 'lazy' });
+      const a = Object.assign(document.createElement('a'), { className: 'btn', href: photoUrl(p.name, true), textContent: '⬇ Muat turun' });
+      const toggle = (on) => { on ? selected.add(p.name) : selected.delete(p.name); chk.checked = on; updateSel(); };
+      chk.onchange = () => toggle(chk.checked);
+      img.onclick = () => openLb(p.name);
+      t.append(chk, img, a); return t;
+    }) : [Object.assign(document.createElement('p'), { textContent: 'Belum ada gambar.' })]));
+  }
+  updateSel();
+  show('session');
+}
+
+// ---------- Paparan gambar (dalam page) ----------
+let photoNames = [], lbName = null;
+function openLb(n) { lbName = n; $('#lbImg').src = photoUrl(n); $('#lb').classList.remove('hidden'); }
+function closeLb() { lbName = null; $('#lb').classList.add('hidden'); $('#lbImg').removeAttribute('src'); }
+function stepLb(d) {
+  const i = photoNames.indexOf(lbName);
+  if (i >= 0 && photoNames.length) openLb(photoNames[(i + d + photoNames.length) % photoNames.length]);
+}
+$('#lbClose').onclick = closeLb;
+$('#lbPrev').onclick = () => stepLb(-1);
+$('#lbNext').onclick = () => stepLb(1);
+$('#lb').onclick = (e) => { if (e.target === $('#lb')) closeLb(); };
+document.addEventListener('keydown', (e) => {
+  if (!lbName) return;
+  if (e.key === 'Escape') closeLb(); else if (e.key === 'ArrowLeft') stepLb(-1); else if (e.key === 'ArrowRight') stepLb(1);
+});
+
+// ---------- Pilihan / bulk ----------
+const selected = new Set();
+function updateSel() {
+  document.querySelectorAll('#grid .tile').forEach((t) => t.classList.toggle('sel', selected.has(t.dataset.name)));
+  $('#bulk').classList.toggle('hidden', !selected.size);
+  $('#selCount').textContent = `${selected.size} dipilih`;
+  const all = document.querySelectorAll('#grid .tile').length;
+  $('#selAll').textContent = all && selected.size === all ? 'Nyahpilih semua' : 'Pilih semua';
+}
+$('#selAll').onclick = () => {
+  const tiles = [...document.querySelectorAll('#grid .tile')];
+  const every = tiles.length && selected.size === tiles.length;
+  selected.clear();
+  if (!every) tiles.forEach((t) => selected.add(t.dataset.name));
+  tiles.forEach((t) => (t.querySelector('.chk').checked = selected.has(t.dataset.name)));
+  updateSel();
+};
+$('#clearSel').onclick = () => {
+  selected.clear();
+  document.querySelectorAll('#grid .chk').forEach((c) => (c.checked = false));
+  updateSel();
+};
+$('#dlSel').onclick = () => {
+  const a = Object.assign(document.createElement('a'), { href: `${API}/sessions/${sid}/zip?names=${[...selected].join(',')}` });
+  document.body.append(a); a.click(); a.remove();
+};
+$('#delSel').onclick = async () => {
+  if (!confirm(`Padam ${selected.size} gambar? Tak boleh diundur.`)) return;
+  const r = await api(`/sessions/${sid}/photos/delete`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names: [...selected] }) });
+  if (!r.ok) return alert('Gagal padam');
+  selected.clear();
+  loadSession(true);
+};
+$('#delSessBtn').onclick = async () => {
+  const n = Number($('#count').textContent);
+  if (await delSession(sid, n)) location.href = '/filetransfer';
+};
+
+function camMsg(t) { const m = $('#camMsg'); m.textContent = t; m.classList.toggle('hidden', !t); }
+async function startCam() {
+  camMsg('');
+  if (!navigator.mediaDevices?.getUserMedia) {
+    camMsg(window.isSecureContext ? 'Browser ini tak support kamera dalam page.' : 'Kamera dalam browser hanya jalan di HTTPS (atau localhost).');
+    return;
+  }
+  stopCam();
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: facing }, width: { ideal: 2048 }, height: { ideal: 1536 }, aspectRatio: { ideal: 4 / 3 } }, audio: false,
+    });
+    $('#video').srcObject = stream;
+    await $('#video').play();
+    setAr();
+    $('#openCam').classList.add('hidden');
+    $('#camWrap').classList.remove('hidden');
+    $('#camCard').classList.add('camopen');
+  } catch (e) {
+    camMsg(e.name === 'NotAllowedError' ? 'Kebenaran kamera ditolak. Benarkan kamera untuk site ini.' : 'Tak dapat buka kamera: ' + (e.message || e.name));
+  }
+}
+// sentiasa 4:3 (landscape) atau 3:4 (fon menegak), ikut orientasi video
+const targetRatio = (v) => (v.videoWidth >= v.videoHeight ? 4 / 3 : 3 / 4);
+function setAr() {
+  const v = $('#video');
+  if (v.videoWidth) v.style.setProperty('--ar', targetRatio(v));
+}
+$('#video').addEventListener('loadedmetadata', setAr);
+$('#video').addEventListener('resize', setAr);
+function stopCam() {
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null;
+  $('#video').srcObject = null;
+  $('#camWrap').classList.add('hidden');
+  $('#camCard').classList.remove('camopen');
+  $('#openCam').classList.remove('hidden');
+}
+$('#openCam').onclick = startCam;
+$('#closeCam').onclick = stopCam;
+$('#flipBtn').onclick = () => { facing = facing === 'environment' ? 'user' : 'environment'; startCam(); };
+
+$('#snapBtn').onclick = async () => {
+  const v = $('#video');
+  if (busy || !v.videoWidth) return;
+  busy = true; $('#snapBtn').disabled = true; $('#upState').textContent = 'Uploading…';
+  const f = $('#flash'); f.classList.remove('on'); void f.offsetWidth; f.classList.add('on');
+  try {
+    const c = document.createElement('canvas');
+    // potong tengah-tengah kepada 4:3 supaya sama seperti yang dipaparkan
+    const vw = v.videoWidth, vh = v.videoHeight, tr = targetRatio(v);
+    let sw = vw, sh = vw / tr;
+    if (sh > vh) { sh = vh; sw = vh * tr; }
+    c.width = Math.round(sw); c.height = Math.round(sh);
+    c.getContext('2d').drawImage(v, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, c.width, c.height);
+    const blob = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.92));
+    const r = await api(`/sessions/${sid}/photos`, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: blob });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Gagal simpan');
+    await loadSession();
+    $('#upState').textContent = 'Dah upload ✓';
+  } catch (e) { if (e.message !== 'auth') { camMsg(e.message); $('#upState').textContent = 'Gagal upload ✗'; } }
+  busy = false; $('#snapBtn').disabled = false;
+};
+
+const markDone = async () => {
+  if (!confirm('Tandakan session ini Siap? Anda masih boleh tambah gambar kemudian.')) return;
+  stopCam();
+  await api(`/sessions/${sid}/done`, { method: 'POST' });
+  location.href = '/filetransfer';
+};
+$('#doneBtn').onclick = markDone;
+$('#doneBtn2').onclick = markDone;
+
+// ---------- Mula ----------
+(async () => {
+  try {
+    if (!sid) { await loadList(); show('list'); poll = setInterval(() => { if (!document.hidden) loadList().catch(() => {}); }, 5000); }
+    else { await loadSession(true); poll = setInterval(() => { if (!document.hidden) loadSession().catch(() => {}); }, 3000); }
+  } catch (e) { if (e.message !== 'auth') show('login'); }
+})();
+</script>
+</body>
+</html>
